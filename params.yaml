@@ -1,0 +1,73 @@
+# Central configuration for the DVC pipeline.
+# Every stage reads from here; nothing is hardcoded in src/.
+
+paths:
+  raw_csv: data/TabFormer/raw/card_transaction.v1.csv
+  interim: data/interim
+  processed: data/processed
+  graph: data/graph
+  models: data/models
+
+ingest:
+  # Row-group size for Parquet output; tuned for streaming reads during training.
+  row_group_size: 1_000_000
+  partition_on: Year
+
+split:
+  # Temporal split. NEVER random -- transactions are time-ordered and a random
+  # split leaks future information into training.
+  train_end_year: 2017    # train:  Year <= 2017
+  val_year: 2018          # val:    Year == 2018
+  # test: Year >= 2019
+
+validation:
+  # Sanity bounds. TabFormer is ~0.1% fraud; anything far outside this range
+  # means the label mapping or the file itself is wrong.
+  fraud_rate_min: 0.0005
+  fraud_rate_max: 0.005
+  expected_row_count_min: 20_000_000
+
+features:
+  # One-hot below this cardinality, binary-encode at or above it.
+  one_hot_max_cardinality: 8
+  unknown_string_marker: "XX"
+  unknown_zip_code: 0
+
+velocity:
+  # Live aggregate windows (hours). Shared by the offline feature build and the
+  # online API to prevent train/serve skew.
+  windows_hours: [1, 24, 168]
+
+xgboost:
+  n_estimators: 500
+  max_depth: 8
+  learning_rate: 0.05
+  subsample: 0.8
+  colsample_bytree: 0.8
+  # Class imbalance is ~1:1000; tuned on val, not guessed.
+  scale_pos_weight: 50
+  eval_metric: aucpr
+  early_stopping_rounds: 50
+  random_state: 42
+
+gnn:
+  hidden_channels: 128
+  embedding_dim: 64
+  num_layers: 2
+  # NeighborLoader fanout per layer -- keeps the sampled subgraph small enough
+  # that the 9.6GB feature matrix never needs to land on the GPU.
+  num_neighbors: [25, 10]
+  batch_size: 4096
+  learning_rate: 0.001
+  epochs: 20
+  dropout: 0.3
+  random_state: 42
+
+evaluate:
+  # Operating point for the fraud decision threshold.
+  target_false_positive_rate: 0.01
+  precision_at_k: [100, 1000]
+
+mlflow:
+  experiment_name: fraud-detection
+  registered_model_name: fraud-champion

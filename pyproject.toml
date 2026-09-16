@@ -1,0 +1,70 @@
+[project]
+name = "fraud-mlops"
+version = "0.1.0"
+description = "End-to-end MLOps pipeline for credit-card fraud detection on IBM TabFormer"
+requires-python = ">=3.11,<3.13"
+
+dependencies = [
+    "pandas>=2.2",
+    "polars>=1.0",
+    "pyarrow>=16.0",
+    "numpy>=1.26",
+    "scikit-learn>=1.5",
+    "xgboost>=2.1",
+    "pandera[pandas]>=0.20",
+    "mlflow>=2.16",
+    "dvc[s3]>=3.55",
+    "pydantic>=2.8",
+    "pydantic-settings>=2.4",
+    "python-dotenv>=1.0",
+    "pyyaml>=6.0",
+]
+
+[project.optional-dependencies]
+api = [
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.30",
+    "psycopg[binary,pool]>=3.2",
+    "sqlalchemy>=2.0",
+    "shap>=0.46",
+    "prometheus-client>=0.21",
+]
+gnn = [
+    "torch>=2.4",
+    "torch-geometric>=2.6",
+]
+monitoring = [
+    "nannyml>=0.12",
+]
+dashboard = [
+    "streamlit>=1.38",
+    "plotly>=5.24",
+]
+dev = [
+    "pytest>=8.3",
+    "pytest-cov>=5.0",
+    "ruff>=0.6",
+    "mypy>=1.11",
+]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.ruff]
+line-length = 100
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+
+[tool.mypy]
+python_version = "3.11"
+ignore_missing_imports = true

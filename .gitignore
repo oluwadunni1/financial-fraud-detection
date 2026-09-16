@@ -14,3 +14,14 @@ __pycache__
 
 # json
 notebooks/*.json
+# --- MLOps platform ---
+.venv/
+.env
+*.egg-info/
+data/interim/
+data/processed/
+data/graph/
+data/models/
+mlruns/
+.dvc/cache
+.dvc/tmp
