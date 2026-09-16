@@ -27,16 +27,22 @@ phases; section 10 is the Lightning AI setup.
 
 ## Current state (update as phases complete)
 
-Phase 0, partially done. Scaffolding committed; nothing runs end to end yet.
+**Phase 0 complete (2026-09-16)**, except two credential-blocked checks. Nothing runs end
+to end yet -- there is still no `dvc.yaml`; that is Phase 1.
 
 | | Status |
 |---|---|
 | Scaffold (`pyproject.toml`, `params.yaml`, `src/fraud/`, `sql/`) | Done |
-| TabFormer data downloaded | **No** |
-| Python env installed | **No** |
-| DagsHub repo + token | **No** (Model Registry support confirmed) |
-| Supabase project + `sql/001_init.sql` applied | **No** |
-| DVC initialised | **No** |
+| TabFormer data downloaded | **Yes** -- 24,386,900 rows, 2.35 GB, DVC-tracked |
+| Python env installed | **Yes** -- `.venv`, CPython 3.12.13, `[dev]` extras |
+| Schemas validated against real data | **Yes** -- `Amount` regex bug found and fixed |
+| Tests | **Yes** -- `tests/test_schemas.py`, 26 passing |
+| DVC initialised | **Yes** -- local cache, **no remote** (deliberate, see below) |
+| DagsHub repo + token | **Verified** -- tracking + Model Registry both work |
+| Supabase project + `sql/*.sql` applied | **Done** -- eu-west-1, pgvector + 7 tables verified |
+
+Measured dataset facts now live in `docs/ARCHITECTURE.md` section 2.1. Read that before
+writing any feature code -- several of them contradict what the scaffolding assumed.
 
 ## Decisions already made — do not relitigate
 
@@ -60,6 +66,15 @@ These were settled deliberately. Reopen only if new evidence appears.
    Actions scheduled workflows plus a cron container cover it. Adding a scheduler +
    webserver + metadata DB is the classic overengineering trap. Prefect Cloud free tier
    if an orchestration UI is genuinely wanted.
+10. **DagsHub hosts MLflow only -- it is not the DVC remote.** DVC runs with a local cache
+   and **no remote at all** for now: the raw CSV is re-downloadable, the big graph
+   artifacts are regenerated rather than pushed, and model artifacts go to MLflow. A
+   remote earns its place when a second machine needs `dvc pull` (the Phase 3 GPU Studio,
+   or CI), and at that point it is **Cloudflare R2** -- S3-compatible so `dvc[s3]` already
+   covers it, no egress fees. Commands are in ARCHITECTURE.md section 4.3.
+11. **The 2016+ GNN subsample stays, but the storage justification is dead.** The feature
+   matrix measures 7.32 GB fp32, not the estimated 9.6 GB, and there is no DagsHub ceiling
+   to hit any more. Justify the subsample on modelling grounds only.
 
 ## Conventions
 
@@ -86,8 +101,26 @@ These were settled deliberately. Reopen only if new evidence appears.
   recall at a fixed FPR.
 - **Write Parquet, not CSV.** The blueprint's `to_csv` calls would turn a ~3 GB feature
   matrix into ~30 GB.
+- **Refunds are `$-292.00`, not `-$292.00`.** The minus is *inside* the dollar sign, on
+  1,244,689 rows (5.1%). The original schema regex assumed the US convention and rejected
+  every refund. Parse with `^\$-?\d+\.\d{2}$`.
+- **The CSV is ordered by user, not by time.** The first 200k rows span 1999-2020.
+  Partitioning by `Year` is a full shuffle; never assume file order is time order.
+- **`Merchant Name` is a hashed int64 near the full range and often negative.** It must
+  never round-trip through a float -- it exceeds float64's exact-integer range. `MCC` is
+  the unrelated 4-digit category code.
+- **2020 has zero fraud** in all 336,500 rows and the file stops at 2020-02-28, so a
+  `Year >= 2019` test set draws every positive from 2019 alone.
+- **Reading the 2.35 GB CSV with pandas' default inference yields mixed dtypes.** Pass
+  explicit `dtype=`; a silent `object` column will break validation in confusing ways.
 - **Do not load the full graph onto the GPU.** Use PyG `NeighborLoader`; features stay in
   CPU RAM and are gathered per batch.
+- **`source .venv/bin/activate` does NOT change which `python` runs.** The shell profile
+  activates conda and zsh caches the lookup, so a bare `python` silently stays on
+  `/home/zeus/miniconda3/envs/cloudspace/bin/python` even though `which python` says
+  otherwise. Always write `.venv/bin/python`, `.venv/bin/dvc`, and
+  `uv pip install --python .venv/bin/python`. This already split the dependencies across two
+  environments once. See ARCHITECTURE.md 10.1.
 
 ## Unresolved
 
@@ -95,17 +128,21 @@ These were settled deliberately. Reopen only if new evidence appears.
 - Is the foundation-model checkpoint loadable as standard Llama in plain `transformers`?
   If yes, skip the NeMo container entirely — pip install vs multi-GB image. Check early,
   it changes the Phase 3.5 environment.
-- All storage estimates in ARCHITECTURE.md section 4.4 are **unmeasured**. Correct them once
-  the CSV lands.
+- ~~All storage estimates in ARCHITECTURE.md section 4.4 are unmeasured.~~ **Resolved
+  2026-09-16** -- section 4.4 now carries measured figures.
 
 ## Commands
 
 ```bash
-uv venv --python 3.12 && source .venv/bin/activate
-uv pip install -e ".[dev]"              # add api,gnn,monitoring as phases need them
-pytest                                   # tests
-ruff check src tests                     # lint
-dvc repro                                # run the pipeline
+uv venv --python 3.12
+uv pip install --python .venv/bin/python -e ".[dev]"   # add api,gnn,monitoring per phase
+
+# Always invoke the venv explicitly -- activate is not enough here (see gotchas).
+.venv/bin/python -m pytest                         # tests
+.venv/bin/python -m ruff check src tests scripts   # lint
+.venv/bin/dvc data status                          # tracked data clean? (no dvc.yaml yet)
+.venv/bin/dvc repro                                # the pipeline (Phase 1 onward)
+.venv/bin/python scripts/verify_services.py        # DagsHub + Supabase, 11 checks
 ```
 
 GPU is needed only for Phase 3. Run other phases on a CPU machine to conserve credits.

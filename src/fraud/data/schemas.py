@@ -9,6 +9,10 @@ Two schemas, one per pipeline boundary:
 
 Column names below are the literal CSV headers. They contain spaces and a
 question mark; that is deliberate, not a typo. Renaming happens in ingest.
+
+Measured against the real file (24,386,900 rows, 2026-09-16) -- see
+docs/ARCHITECTURE.md section 4.4. Every constraint here was checked against all
+24M rows, not inferred from a sample.
 """
 
 from __future__ import annotations
@@ -17,7 +21,7 @@ import pandas as pd
 import pandera.pandas as pa
 from pandera.typing import Series
 
-# Raw CSV headers, in file order.
+# Raw CSV headers, in file order. Verified to match the shipped file exactly.
 RAW_COLUMNS = [
     "User",
     "Card",
@@ -50,9 +54,19 @@ COLUMN_RENAME = {
 UNKNOWN_STRING_MARKER = "XX"
 UNKNOWN_ZIP_CODE = 0
 
+# The sign sits INSIDE the dollar sign: refunds are "$-292.00", not "-$292.00".
+# 1,244,689 rows (5.1%) are negative and every one uses this form. Getting this
+# wrong fails validation on every refund in the dataset.
+AMOUNT_PATTERN = r"^\$-?\d+\.\d{2}$"
+
 
 class RawTransactionSchema(pa.DataFrameModel):
-    """Validates the CSV exactly as read, before any coercion."""
+    """Validates the CSV exactly as read, before any coercion.
+
+    All fifteen columns are declared so that `strict = True` can do its job:
+    if IBM adds, drops or renames a column, the pipeline stops here instead of
+    silently training on a different file.
+    """
 
     User: Series[int] = pa.Field(ge=0)
     Card: Series[int] = pa.Field(ge=0)
@@ -63,25 +77,41 @@ class RawTransactionSchema(pa.DataFrameModel):
     # "HH:MM", 24-hour.
     Time: Series[str] = pa.Field(str_matches=r"^\d{1,2}:\d{2}$")
 
-    # "$123.45" or "-$123.45" -- refunds are negative.
-    Amount: Series[str] = pa.Field(str_matches=r"^-?\$\d+\.\d{2}$")
+    # "$123.45" or "$-123.45" -- refunds put the minus after the dollar sign.
+    Amount: Series[str] = pa.Field(str_matches=AMOUNT_PATTERN)
 
-    # Hashed merchant id; large, may be negative.
+    # Three values: Swipe / Chip / Online Transaction.
+    chip: Series[str] = pa.Field(alias="Use Chip", nullable=False)
+
+    # Hashed merchant id; large and frequently negative, so no lower bound.
+    # Spans nearly the full int64 range (-9.22e18 .. 9.22e18). 100,343 distinct.
+    merchant_name: Series[int] = pa.Field(alias="Merchant Name")
+
+    city: Series[str] = pa.Field(alias="Merchant City", nullable=False)
+
+    # Null for online transactions -- 2,720,821 rows (11.2%).
+    state: Series[str] = pa.Field(alias="Merchant State", nullable=True)
+
+    # Nullable in the source file (2,878,135 rows, 11.8%). Read as float
+    # because of the nulls, which drops leading zeros on the 1,555,116 zips
+    # below 10000 -- harmless, since Zip is used as a categorical code.
+    Zip: Series[float] = pa.Field(nullable=True, ge=0)
+
+    # Merchant *category* code: 4-digit, 109 distinct, range 1711..9402.
     MCC: Series[int] = pa.Field(ge=0)
 
-    # Nullable in the source file.
-    Zip: Series[float] = pa.Field(nullable=True)
+    # Null 98.4% of the time (23,998,469 rows); 23 distinct non-null values,
+    # each a trailing-comma-separated list like "Bad PIN,Technical Glitch,".
+    errors: Series[str] = pa.Field(alias="Errors?", nullable=True)
+
+    fraud: Series[str] = pa.Field(alias="Is Fraud?", isin=["Yes", "No"])
 
     class Config:
         name = "RawTransaction"
         # Extra/renamed columns are a hard error -- if IBM changes the file we
         # want the pipeline to stop, not silently train on the wrong thing.
-        strict = False
+        strict = True
         coerce = False
-
-    @pa.check("Is Fraud?", name="fraud_label_is_yes_no")
-    def fraud_is_yes_no(cls, s: Series[str]) -> Series[bool]:
-        return s.isin(["Yes", "No"])
 
 
 class CleanTransactionSchema(pa.DataFrameModel):
@@ -97,6 +127,8 @@ class CleanTransactionSchema(pa.DataFrameModel):
     Time: Series[int] = pa.Field(ge=0, lt=1440)
 
     Amount: Series[float] = pa.Field(nullable=False)
+    # Kept as str after rename: the id exceeds float64's exact-integer range,
+    # so it must never round-trip through a float.
     Merchant: Series[str] = pa.Field(nullable=False)
     City: Series[str] = pa.Field(nullable=False)
     State: Series[str] = pa.Field(nullable=False)
@@ -118,6 +150,10 @@ def check_fraud_rate(df: pd.DataFrame, lo: float, hi: float) -> float:
     A fraud rate outside [lo, hi] almost always means the Yes/No mapping broke
     or the wrong file was loaded -- both of which produce a model that trains
     happily and is completely wrong. Fail the stage instead.
+
+    Measured whole-file rate is 0.00122 (29,757 of 24,386,900). Note this is
+    per-file: individual years range from 0.0 (2020) to 0.0030 (2008), so a
+    per-partition caller needs a wider band than the dataset-level one.
     """
     rate = float(df["Fraud"].mean())
     if not lo <= rate <= hi:

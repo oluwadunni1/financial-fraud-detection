@@ -1,7 +1,8 @@
 # Fraud Detection MLOps Platform — Architecture & Build Plan
 
-> Working reference doc. On implementation, copy to `docs/ARCHITECTURE.md` in the repo.
-> Last updated: 2026-09-16
+> The reference doc for this repo: system design, storage budget, phased build plan,
+> verification strategy. Section 6 has the phases; section 10 is the Lightning AI setup.
+> Last updated: 2026-09-16 (Phase 0 complete -- estimates replaced by measurements)
 
 ---
 
@@ -34,7 +35,7 @@ projects lack:
 | TabFormer dataset + the fraud framing | `financial-fraud-training` container (NGC-gated black box) |
 | Graph construction logic (`src/preprocess_TabFormer_lp.py`) | Triton serving (GPU-gated, overkill for demo) |
 | Tri-partite User→Transaction→Merchant modelling | cuDF hard dependency (no Windows, forces GPU for *preprocessing*) |
-| Temporal split strategy (train <2018 / val 2018 / test >2018) | The notebook-driven workflow |
+| Temporal split strategy (train <=2017 / val 2018 / test >=2019) | The notebook-driven workflow |
 
 **Why drop the training container:** you cannot version, instrument, or MLflow-log what you
 can't see inside. Rebuilding the GNN in open PyG is the entire point of the exercise.
@@ -43,23 +44,84 @@ can't see inside. Rebuilding the GNN in open PyG is the entire point of the exer
 
 ## 2. Where we are right now
 
+**Phase 0 complete (2026-09-16).** Every number in this doc that was previously an
+estimate has been replaced by a measurement against the real file. Where a figure is
+still derived rather than observed, it says so.
+
 | | Status |
 |---|---|
 | Repo | Fork at `github.com/oluwadunni1/financial-fraud-detection`, branch `mlops-platform` |
-| Scaffolded | `pyproject.toml`, `params.yaml`, `src/fraud/` package, `sql/001_init.sql`, this doc |
-| Data | **Not downloaded.** `data/TabFormer/raw/` contains only a readme |
-| Dev machine | Windows 11 + Python 3.14 system, `uv` available. **Migrating to Lightning AI.** |
-| GPU | Lightning AI credits available |
-| MLflow | **DagsHub hosted** (decided) |
-| DVC remote | **DagsHub S3-compatible** (decided) |
-| Supabase | Not yet created. Free tier -- see storage budget in section 4.4 |
+| Scaffolded | `pyproject.toml`, `params.yaml`, `src/fraud/`, `sql/*.sql`, `tests/`, this doc |
+| Data | **Downloaded and DVC-tracked.** 24,386,900 rows, 2.35 GB, md5 `5d0f027f333e8ec7d58969a7b8a206f8` |
+| Dev machine | Lightning AI Studio -- Linux, 14 GB RAM, 4 vCPU, **no GPU** (correct for Phases 0-2) |
+| Python env | `.venv` on CPython 3.12.13. **Invoke as `.venv/bin/python`** -- see 10.1 |
+| GPU | Lightning credits available; needed only for Phase 3 |
+| MLflow | **DagsHub hosted and verified** -- tracking + Model Registry both confirmed working |
+| DVC | Initialised, local cache only. **No remote, deliberately** -- see 4.3 |
+| Supabase | **Live** (eu-west-1). Both migrations applied; pgvector + all 7 tables verified |
 | Deploy target | Undecided -- Compose-first, cloud-agnostic (see section 7) |
 
-### Immediate unblocks needed
-1. Download TabFormer `transactions.tgz` (~2.3 GB) -- IBM Box link in `docs/setup.md`
-2. Create DagsHub repo, connect to the GitHub fork, grab access token
-3. Create Supabase project, apply `sql/001_init.sql`
-4. **Verify DagsHub MLflow supports the Model Registry API** (see section 4.3 caveat)
+### 2.1 The dataset, measured
+
+`card_transaction.v1.csv`, 2,354,626,737 bytes, 24,386,900 rows, 15 columns.
+
+| | Measured |
+|---|---|
+| Rows | 24,386,900 |
+| Fraud | 29,757 (**0.122%**, i.e. 1 in 819) |
+| Users | 2,000 |
+| (User, Card) pairs | 6,139 |
+| Merchants | 100,343 |
+| MCC codes | 109 (range 1711-9402) |
+| Cities / States | 13,429 / 223 |
+| Distinct Zip | 27,322 |
+| `Use Chip` | 3 -- Swipe / Chip / Online |
+| `Errors?` | 23 distinct non-null, **98.4% null** (23,998,469 rows) |
+| Null `Zip` / `Merchant State` | 2,878,135 (11.8%) / 2,720,821 (11.2%) |
+| Year range | 1991-2020 |
+
+**Graph node count is therefore 102,343** (2,000 users + 100,343 merchants), which sizes
+`node_embeddings` exactly.
+
+#### Four things the file does that the scaffolding assumed otherwise
+
+1. **Refunds are `$-292.00`, not `-$292.00`** -- the minus sits *inside* the dollar sign.
+   1,244,689 rows (5.1%) are negative. The original `RawTransactionSchema` regex assumed
+   the US convention and would have failed validation on every refund in the dataset.
+   Corrected regex: `^\$-?\d+\.\d{2}$`, verified to match all 24,386,900 rows.
+2. **The file is ordered by user, not by time.** The first 200k rows span 1999-2020.
+   Partitioning by `Year` in Phase 1 is a full shuffle, not a sequential cut -- do not
+   assume file order is time order anywhere.
+3. **`Merchant Name` is a hashed int64 spanning nearly the full range**
+   (-9,222,899,435,637,403,521 .. 9,223,291,803,303,717,674), so it is frequently negative
+   and **must never round-trip through a float** -- it exceeds float64's exact-integer
+   range. `MCC` is the unrelated 4-digit *category* code.
+4. **Reading with pandas' default type inference produces mixed dtypes** on a file this
+   size. Phase 1's `ingest.py` must pass explicit `dtype=` rather than rely on inference.
+
+#### The fraud rate is wildly non-stationary -- this matters for the split
+
+| Split | Years | Rows | Fraud | Rate |
+|---|---|---|---|---|
+| train | 1991-2017 | 20,604,847 | 25,179 | 0.122% |
+| val | 2018 | 1,721,615 | 2,491 | 0.145% |
+| test | 2019-2020 | 2,060,438 | 2,087 | 0.101% |
+
+Per-year rates swing by two orders of magnitude: 0.0035% (2011) to 0.303% (2008). Two
+specific hazards:
+
+> **2020 contains zero fraud** across all 336,500 rows, and the file ends 2020-02-28. It is
+> a partial year that contributes only negatives to the test set. Consider testing on 2019
+> alone, or state plainly that test positives come entirely from 2019.
+
+> **2017 is a 14x outlier low** (255 fraud in 1,723,360 rows = 0.015%) sitting immediately
+> before the train/val boundary, where 2018 jumps back to 0.145%. Training ends on an
+> anomalously clean year and validates on a ~10x dirtier one. This is real, exploitable
+> concept drift for the monitoring story -- but it means a val-set metric drop is not
+> automatically a modelling bug, and `scale_pos_weight` tuned on 2017-heavy data will be
+> miscalibrated for 2018.
+
+Both are dataset properties, not pipeline bugs. Name them in the README.
 
 ## 3. System Architecture
 
@@ -189,7 +251,7 @@ Two things that are not optional:
 | Graph ML | **PyTorch Geometric** | Open, readable, `NeighborLoader` for sampling |
 | Baseline | **XGBoost** | CPU-servable, strong tabular baseline, honest comparison point |
 | GPU training | **Lightning AI** | Credits available |
-| Database | **Supabase** (Postgres + pgvector) | Embedding store + prediction log + MLflow backend, one system |
+| Database | **Supabase** (Postgres + pgvector) | Embedding store + prediction log + hot serving store, one system. MLflow lives on DagsHub, not here |
 | API | **FastAPI** + Pydantic | Async, auto OpenAPI docs, typed validation |
 | Monitoring | **NannyML** | CBPE estimates performance *without labels* — the delayed-label problem |
 | Explainability | **SHAP** | `/explain` endpoint; mirrors blueprint's Shapley story |
@@ -197,92 +259,146 @@ Two things that are not optional:
 | CI | **GitHub Actions** | Lint, test, `dvc repro` on sample, build image |
 
 ### 4.1 Storage sizing
-Superseded by section 4.4, which covers all three tiers and the free-tier limits.
+Superseded by section 4.4, which covers all three tiers against measured data.
 
 ### 4.2 GPU memory note
 Do not load the full graph onto the GPU. `NeighborLoader` samples subgraphs; the feature
 matrix stays in CPU RAM and is gathered per batch. That makes 9.6 GB of features trainable
 on a 24 GB card.
 
-### 4.3 MLflow + DVC hosting -- DagsHub
-DagsHub provides hosted MLflow tracking, an S3-compatible DVC remote, and a git
-remote in one free account. This replaces the earlier "Supabase as MLflow backend"
-idea -- fewer moving parts, nothing to self-host.
+### 4.3 MLflow hosting -- DagsHub. DVC remote -- none yet.
+
+**MLflow lives on DagsHub.** Hosted tracking plus Model Registry, free, nothing to self-host.
 
 ```bash
-# MLflow
 export MLFLOW_TRACKING_URI=https://dagshub.com/<user>/<repo>.mlflow
 export MLFLOW_TRACKING_USERNAME=<user>
 export MLFLOW_TRACKING_PASSWORD=<dagshub-token>
-
-# DVC remote
-dvc remote add -d origin s3://dvc
-dvc remote modify origin endpointurl https://dagshub.com/<user>/<repo>.s3
-dvc remote modify --local origin access_key_id  <dagshub-token>
-dvc remote modify --local origin secret_access_key <dagshub-token>
 ```
 
 > **Confirmed (2026-09-16):** DagsHub's hosted MLflow supports the Model Registry API,
 > so champion/challenger promotion uses the real registry. No tag-based fallback needed.
 
-### 4.4 Storage budget -- the binding constraint
+**DVC has no remote, and that is deliberate.** DVC is initialised with a local cache only.
+DagsHub is *not* used as the DVC remote.
 
+The reasoning: a remote exists to move data between machines. Right now nothing needs
+moving. The raw CSV is re-downloadable from IBM Box in about a minute; the large graph
+artifacts are explicitly regenerated on the GPU Studio rather than pushed (see 4.4); model
+artifacts and embeddings go to MLflow, not the DVC remote. That leaves a handful of small
+Parquet files that do not exist yet. Standing up remote storage now would be versioning
+infrastructure with nothing to version.
+
+A remote earns its place the moment a **second machine** needs `dvc pull` -- i.e. the
+Phase 3 GPU Studio, or CI. At that point it is **Cloudflare R2**: S3-compatible, so the
+already-installed `dvc[s3]` covers it with no new dependency, 10 GB free, and no egress
+fees (the trap with S3 proper when a GPU Studio pulls the same features repeatedly).
+
+```bash
+dvc remote add -d r2 s3://<bucket>
+dvc remote modify r2 endpointurl https://<account-id>.r2.cloudflarestorage.com
+dvc remote modify --local r2 access_key_id     <key>
+dvc remote modify --local r2 secret_access_key <secret>
+```
+
+> Until then, **the DVC cache is the only copy of any derived artifact**, and a Studio's
+> local disk is not a backup. Nothing irreplaceable should live only there -- which is
+> true today, since everything is either re-downloadable or regenerable.
+
+> With no pipeline stages yet, `dvc status` reports "no data or pipelines tracked". The
+> data-level check is **`dvc data status`**, which reports "No changes." Once `dvc.yaml`
+> exists in Phase 1, `dvc status` becomes the right command.
+
+### 4.4 Storage budget -- measured
+
+All figures below are computed from the real file (section 2.1) unless marked *derived*.
 Three tiers, because no single free tier holds everything.
 
 ```
-DagsHub (~10 GB)           Lightning Studio drive       Supabase (500 MB DB)
+DagsHub (MLflow only)      Lightning Studio drive       Supabase (500 MB DB)
 -----------------------    ----------------------       --------------------------
-raw CSV (or hash only)     node_features.parquet <-BIG  transaction_events (rolling)
-processed tabular pq       edges.parquet                node_embeddings   (64-d, GNN)
-model artifacts            training checkpoints         fm_embeddings     (512-d, FM)
-embeddings (~30 MB)        FM checkpoint (56 MB, LFS)   predictions / labels
-MLflow tracking+registry   (regenerated, never pushed)  drift_metrics
+MLflow tracking+registry   raw CSV (2.35 GB)            transaction_events (rolling)
+model artifacts            .dvc/cache (2.2 GB)          node_embeddings   (64-d, GNN)
+embeddings (~38 MB)        node_features.parquet <-BIG  fm_embeddings     (512-d, FM)
+                           edges.parquet                predictions / labels
+                           FM checkpoint (56 MB, LFS)   drift_metrics
 ```
 
+The Studio drive has 348 GB free, so local capacity is not a constraint. The binding
+constraint is Supabase's 500 MB.
+
 #### Why the full history cannot live in Postgres
-The `transactions` table at all 24M rows:
+
+The `transactions` table at all 24,386,900 rows (*derived* from measured row count):
 
 | | Size |
 |---|---|
-| Table (~134 B/row incl. tuple overhead) | ~3.2 GB |
-| 3 btree indexes (~40 B/entry effective) | ~2.4 GB |
-| **Total** | **~5.6 GB vs a 500 MB limit -- 11x over** |
+| Table (~134 B/row incl. tuple overhead) | ~3.27 GB |
+| 3 btree indexes (~40 B/entry effective) | ~2.93 GB |
+| **Total** | **~6.2 GB vs a 500 MB limit -- 12.4x over** |
+
+The argument survives measurement, and got slightly stronger (the earlier estimate was
+5.6 GB / 11x).
 
 #### What actually belongs in Postgres
+
 Velocity windows top out at 7 days, so **serving never reads a transaction older than
 the longest window**. Older rows belong in Parquet. Supabase becomes a rolling hot
-store with a retention job -- which is what production does anyway (hot store + cold
-archive).
+store with a retention job -- which is what production does anyway.
 
-| Table | Sizing assumption | Est. |
+| Table | Sizing basis | Est. |
 |---|---|---|
 | `transaction_events` (narrow, rolling ~30d, cap 500k) | 40 B payload + 2 indexes | ~74 MB |
-| `node_embeddings` (~102k x vector(64)) | ~330 B/row | ~34 MB |
-| `fm_embeddings` (~2k x vector(512)) | ~2.1 KB/row | ~4 MB |
+| `node_embeddings` (**102,343** x vector(64)) | ~330 B/row | **~34 MB** |
+| `fm_embeddings` (**2,000** x vector(512)) | ~2.1 KB/row | **~4 MB** |
 | `predictions` (cap 200k) | ~100 B/row | ~20 MB |
 | `labels` | ~50 B/row | ~10 MB |
 | `drift_metrics`, `job_watermarks` | negligible | ~2 MB |
-| **Total hot store** | | **~145 MB** (3.4x headroom) |
+| **Total hot store** | | **~144 MB** (3.5x headroom) |
 
-Levers if it gets tight: `halfvec(64)` instead of `vector(64)` halves embeddings;
+The node counts are now exact rather than assumed, and the earlier ~102k guess was
+almost exactly right. Levers if it gets tight: `halfvec(64)` halves the GNN embeddings;
 drop `city`/`errors` from the hot table (velocity does not use them).
 
 > **Free-tier gotcha:** Supabase pauses projects after 7 days idle, which would
 > silently break a demo link. The scheduled refresh/NannyML jobs hit the DB, so a
 > daily cron keeps it awake as a side-effect. Make that explicit, do not rely on luck.
 
-#### DagsHub ceiling and the subsampling decision
-~10 GB free. The ~9.6 GB fp32 node-feature matrix does not fit alongside raw data
-and artifacts, so:
+#### The GNN feature matrix is smaller than estimated
 
-- Big graph artifacts are **regenerated on the Lightning Studio** via
-  `dvc repro build_graph` and never pushed to the remote.
-- **Temporally subsample GNN training to 2016+ (~8M transactions)** -> ~3.2 GB fp32,
-  ~1.6 GB fp16. Defensible on modelling grounds too: recent data is more
-  representative and ~8k fraud cases is ample. State this in the README as a
-  deliberate choice, not a hidden shortcut.
+Encoded width, applying `params.yaml: features.one_hot_max_cardinality: 8` to the measured
+cardinalities (one-hot below 8, binary at or above):
 
-All sizes above are estimates -- **measure once the CSV lands** and correct this table.
+| Column | Cardinality | Encoding | Columns |
+|---|---|---|---|
+| Merchant | 100,343 | binary | 17 |
+| Zip | 27,322 | binary | 15 |
+| City | 13,429 | binary | 14 |
+| State | 224 | binary | 8 |
+| MCC | 109 | binary | 7 |
+| Errors | 24 | binary | 5 |
+| Chip | 3 | one-hot | 3 |
+| Amount, Hour, Minute, Year, Month, Day | -- | scaled | 6 |
+| **Total** | | | **75** |
+
+| | Rows | fp32 | fp16 |
+|---|---|---|---|
+| Full history | 24,386,900 | **7.32 GB** | 3.66 GB |
+| 2016+ subsample | 7,214,337 | **2.16 GB** | 1.08 GB |
+
+*Derived: final width lands in Phase 1 once the encoder is actually fitted.*
+
+> **This weakens the stated reason for subsampling.** Section 4.4 previously justified
+> the 2016+ cut by a 9.6 GB matrix not fitting in DagsHub's ~10 GB. The real matrix is
+> **7.32 GB**, DagsHub is no longer the DVC remote, and the Studio has 348 GB free -- so
+> the *storage* argument no longer binds. The *modelling* argument still does: recent data
+> is more representative and 2016+ still contains ~8,400 fraud cases, which is ample.
+> Keep the subsample, but justify it on modelling grounds in the README. Do not repeat the
+> storage rationale, which measurement has retired.
+
+Big graph artifacts are still **regenerated on the Studio** via `dvc repro build_graph`
+rather than stored anywhere central -- with no DVC remote that is now the only option,
+and it was already the plan.
 
 ## 5. Repo Structure (target)
 
@@ -331,13 +447,19 @@ financial-fraud-detection/
 
 Each phase ends with something that runs. Don't start the next until the current one does.
 
-### Phase 0 — Foundations
-- [ ] WSL2 + Ubuntu (needed for a Linux-parity dev loop)
-- [ ] `uv` or Poetry project, pin Python 3.11/3.12
-- [ ] Download TabFormer, verify row count and fraud rate
-- [ ] `git init` the new structure on a branch; DVC init; remote → Supabase Storage
-- [ ] Supabase project created, schema from §3.2 applied
-- **Done when:** `dvc status` is clean and raw data is tracked.
+### Phase 0 — Foundations — **COMPLETE (2026-09-16)**
+- [x] Linux dev loop (Lightning AI Studio, not WSL2 -- the migration made WSL2 moot)
+- [x] `uv` project on Python 3.12.11, `uv pip install -e ".[dev]"`
+- [x] Download TabFormer, verify row count and fraud rate (24,386,900 rows / 0.122%)
+- [x] DVC init; raw CSV tracked. **No remote** -- see 4.3 for why
+- [x] Schemas validated against the real file; `Amount` regex bug found and fixed
+- [x] `tests/test_schemas.py` -- 26 tests, corruption cases rejected
+- [x] Storage estimates in 4.4 replaced with measurements
+- [x] Supabase project created, schema from 3.2 applied and verified
+- [x] DagsHub MLflow connectivity + **Model Registry** smoke test (register, alias, read back)
+- **Done when:** `dvc data status` is clean and raw data is tracked. **Met.**
+
+Re-check any time with `.venv/bin/python scripts/verify_services.py` (11 checks).
 
 ### Phase 1 — Data & validation
 - [ ] `ingest.py`: CSV → Parquet partitioned by year
@@ -528,13 +650,37 @@ cp .env.example .env    # then fill in DagsHub + Supabase credentials
 ```
 
 ### Where each artifact lives on the Studio
-| Artifact | Location | Pushed to DagsHub? |
+| Artifact | Location | Pushed anywhere? |
 |---|---|---|
-| Raw CSV | Studio drive (`data/TabFormer/raw/`) | No -- re-downloadable |
-| Processed tabular Parquet | Studio drive | Yes |
-| `node_features.parquet` (~3.2 GB) | Studio drive | **No** -- regenerate via `dvc repro` |
-| `edges.parquet` | Studio drive | Yes (small) |
-| Model artifacts / embeddings | MLflow | Yes |
+| Raw CSV (2.35 GB) | Studio drive (`data/TabFormer/raw/`) | n/a -- no DVC remote; re-downloadable |
+| Processed tabular Parquet | Studio drive + DVC cache | n/a -- see 4.3 |
+| `node_features.parquet` (~2.16 GB at 2016+) | Studio drive | **No** -- regenerate via `dvc repro` |
+| `edges.parquet` | Studio drive | n/a (small) |
+| Model artifacts / embeddings | MLflow on DagsHub | Yes |
+
+### 10.1 Always invoke `.venv/bin/python` explicitly
+
+**`source .venv/bin/activate` is not sufficient on this Studio.** The shell starts from a
+profile that activates the conda `cloudspace` env, and zsh caches command lookups in a hash
+table. Activating the venv prepends to `PATH`, but a bare `python` still resolves from the
+stale hash to `/home/zeus/miniconda3/envs/cloudspace/bin/python`. `which python` reports the
+venv while `sys.executable` reports conda -- the two genuinely disagree.
+
+This bit once already: `uv pip install -e ".[dev]"` run before any activate saw
+`CONDA_PREFIX` with no `VIRTUAL_ENV` and installed the whole project into the **conda** env,
+while a later `uv pip install psycopg` run after an activate went to `.venv`. Two
+environments, each holding half the dependencies, and every check appearing to pass.
+
+Rules that avoid it entirely:
+
+```bash
+.venv/bin/python -m pytest              # not: python -m pytest
+.venv/bin/python -m ruff check src tests scripts
+.venv/bin/dvc repro                     # not: dvc repro
+uv pip install --python .venv/bin/python <pkg>    # always pin the target
+```
+
+`hash -r` after activating also works, but explicit paths cannot be forgotten.
 
 ### Studio hygiene
 - Studios **sleep when idle** -- long training runs need the job to keep the session
@@ -544,8 +690,10 @@ cp .env.example .env    # then fill in DagsHub + Supabase credentials
   run on a cheaper CPU Studio to conserve credits.
 
 ### First tasks on arrival
-1. Download TabFormer, **measure the real numbers** (row count, unique users, unique
-   merchants, fraud rate, feature width) and correct the estimates in section 4.4.
-2. Verify DagsHub MLflow Model Registry support (section 4.3 caveat).
-3. Apply `sql/001_init.sql` to Supabase, confirm `pgvector` is available.
+1. ~~Download TabFormer and measure the real numbers~~ **Done** -- see section 2.1.
+2. Verify DagsHub MLflow Model Registry support against your own repo and token.
+3. Apply `sql/001_init.sql` then `sql/002_challenger.sql` to Supabase, confirm `pgvector`.
 4. Resume at Phase 1.
+
+Items 2 and 3 need credentials in `.env` and are the only things standing between here
+and Phase 1.

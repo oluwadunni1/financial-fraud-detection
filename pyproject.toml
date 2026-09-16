@@ -57,6 +57,10 @@ where = ["src"]
 [tool.ruff]
 line-length = 100
 src = ["src", "tests"]
+# The NVIDIA originals are read-only reference (see CLAUDE.md): we port their
+# logic into src/fraud/, we never edit them. Linting them would make
+# `ruff check src tests` permanently red for changes we are not allowed to make.
+extend-exclude = ["src/preprocess_TabFormer*.py"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "SIM"]

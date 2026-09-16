@@ -1,8 +1,16 @@
-# datasets
+# datasets -- contents are DVC-tracked, never committed.
+# Re-including a file requires re-including every parent directory first:
+# git does not descend into an excluded directory, so `!data/a/b/c.txt`
+# alone is silently ignored when `data/*` excludes `data/a`.
 data/*
-
 !data/readme.md
+!data/TabFormer/
+data/TabFormer/*
+!data/TabFormer/raw/
+data/TabFormer/raw/*
 !data/TabFormer/raw/readme.md
+# The .dvc pointers ARE committed -- they are how the data is versioned.
+!data/TabFormer/raw/*.dvc
 
 # checkpoint
 .ipynb_checkpoints
