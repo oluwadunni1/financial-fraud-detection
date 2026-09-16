@@ -6,6 +6,16 @@ A fork of the **NVIDIA AI Blueprint: Financial Fraud Detection**, being extended
 `mlops-platform` branch into an end-to-end MLOps pipeline (DVC, MLflow, Pandera, NannyML,
 FastAPI, Supabase, Docker).
 
+Three models compete through one serving contract and one registry:
+1. **XGBoost** on tabular features -- baseline, ships first
+2. **GraphSAGE** -- relational structure, ported from the blueprint
+3. **Foundation model** -- sequential structure, from
+   https://github.com/oluwadunni1/transaction-foundation-model (decoder-only Llama,
+   ~29M params, frozen feature extractor)
+
+The comparison is the point: does relational or sequential structure matter more for
+card fraud? Champion/challenger swapping is what gives the registry a real job.
+
 - `main` tracks NVIDIA upstream. **Do not commit work there.**
 - `mlops-platform` is the working branch.
 
@@ -24,7 +34,7 @@ Phase 0, partially done. Scaffolding committed; nothing runs end to end yet.
 | Scaffold (`pyproject.toml`, `params.yaml`, `src/fraud/`, `sql/`) | Done |
 | TabFormer data downloaded | **No** |
 | Python env installed | **No** |
-| DagsHub repo + token | **No** |
+| DagsHub repo + token | **No** (Model Registry support confirmed) |
 | Supabase project + `sql/001_init.sql` applied | **No** |
 | DVC initialised | **No** |
 
@@ -44,6 +54,12 @@ These were settled deliberately. Reopen only if new evidence appears.
 6. **XGBoost baseline ships before the GNN**, so serving/monitoring/deploy phases are not
    blocked behind GPU work.
 7. **Pandera over Great Expectations** — same value, far less config.
+8. **Do not pretrain the foundation model.** The repo ships a 56 MB checkpoint; pretraining
+   needs 8x A100 and would burn the whole Lightning budget. Forward pass only.
+9. **No full orchestrator** (Airflow/Dagster/Prefect-server). The DVC DAG plus GitHub
+   Actions scheduled workflows plus a cron container cover it. Adding a scheduler +
+   webserver + metadata DB is the classic overengineering trap. Prefect Cloud free tier
+   if an orchestration UI is genuinely wanted.
 
 ## Conventions
 
@@ -61,8 +77,11 @@ These were settled deliberately. Reopen only if new evidence appears.
 - **Train/serve skew on velocity features is the top project risk.** They must be computed
   by the same code offline and online — one module in `src/fraud/features/velocity.py`,
   two callers, with a test asserting they agree on fixed input.
-- **`node_embeddings.model_version` must match the serving head.** v1 embeddings are
-  meaningless to a v2 model. They version and deploy together.
+- **`model_version` must match the serving head.** v1 embeddings are meaningless to a v2
+  model. They version and deploy together — this is also what makes model swapping safe.
+- **The two embedding sources have different shapes.** GNN gives 64-d user *and* merchant
+  embeddings; the foundation model gives 512-d user embeddings only. Separate tables
+  (pgvector dims are fixed per column) and different assembled feature vectors.
 - **Fraud rate is ~0.1%.** Accuracy is a useless metric here. Use AUC-PR, precision@k, and
   recall at a fixed FPR.
 - **Write Parquet, not CSV.** The blueprint's `to_csv` calls would turn a ~3 GB feature
@@ -72,10 +91,10 @@ These were settled deliberately. Reopen only if new evidence appears.
 
 ## Unresolved
 
-- Does DagsHub's hosted MLflow support the **Model Registry** API? If not, fall back to
-  tag-based champion resolution in `src/fraud/models/registry.py`. Phase 2 depends on this.
 - Deploy target (Cloud Run recommended). Build Compose-first until Phase 6.
-- Second TabFormer model for comparison — repo link not yet provided.
+- Is the foundation-model checkpoint loadable as standard Llama in plain `transformers`?
+  If yes, skip the NeMo container entirely — pip install vs multi-GB image. Check early,
+  it changes the Phase 3.5 environment.
 - All storage estimates in ARCHITECTURE.md section 4.4 are **unmeasured**. Correct them once
   the CSV lands.
 

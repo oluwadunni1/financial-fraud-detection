@@ -146,7 +146,8 @@ Canonical definition lives in `sql/001_init.sql`. Shape:
 
 | Table | Role |
 |---|---|
-| `node_embeddings` | Precomputed GNN embeddings, `vector(64)` + `computed_at` + `model_version` |
+| `node_embeddings` | Precomputed GNN embeddings, `vector(64)`, users + merchants |
+| `fm_embeddings` | Foundation-model embeddings, `vector(512)`, users only |
 | `transaction_events` | **Narrow, rolling hot store** for velocity aggregates -- not the history |
 | `predictions` | Every score, with `latency_ms`, `embedding_age_seconds`, cold-start flags |
 | `labels` | Late-arriving ground truth (simulated chargebacks) |
@@ -155,8 +156,12 @@ Canonical definition lives in `sql/001_init.sql`. Shape:
 
 Two things that are not optional:
 
-> **`model_version` on `node_embeddings`.** Embeddings from model v1 are meaningless
-> to a v2 serving head. They version and deploy together.
+> **`model_version` on every embedding table.** Embeddings from model v1 are meaningless
+> to a v2 serving head. They version and deploy together. This is also the mechanism that
+> makes champion/challenger swapping safe.
+
+> **Two embedding tables, not one.** pgvector columns are fixed-dimension, so 64-d GNN
+> and 512-d foundation-model embeddings cannot share a column.
 
 > **`transaction_events` is a hot store, not an archive.** It holds a rolling window
 > (`prune_transaction_events()`); the full 24M-row history lives in Parquet on the
@@ -217,24 +222,21 @@ dvc remote modify --local origin access_key_id  <dagshub-token>
 dvc remote modify --local origin secret_access_key <dagshub-token>
 ```
 
-> **Caveat to verify early:** DagsHub's hosted MLflow definitely supports *tracking*.
-> Model *Registry* API support is less certain. If the registry is unavailable, fall
-> back to tagging runs (`champion=true`) and resolving by tag in
-> `src/fraud/models/registry.py`. Same outcome, slightly more code. Phase 2 depends
-> on knowing which.
+> **Confirmed (2026-09-16):** DagsHub's hosted MLflow supports the Model Registry API,
+> so champion/challenger promotion uses the real registry. No tag-based fallback needed.
 
 ### 4.4 Storage budget -- the binding constraint
 
 Three tiers, because no single free tier holds everything.
 
 ```
-DagsHub (~10 GB)          Lightning Studio drive        Supabase (500 MB DB)
---------------------      ------------------------      --------------------
-raw CSV (or hash only)    node_features.parquet  <-BIG  transaction_events (rolling)
-processed tabular pq      edges.parquet                 node_embeddings
-model artifacts           training checkpoints          predictions / labels
-embeddings (~26 MB)       (regenerated, never pushed)   drift_metrics
-MLflow tracking/registry
+DagsHub (~10 GB)           Lightning Studio drive       Supabase (500 MB DB)
+-----------------------    ----------------------       --------------------------
+raw CSV (or hash only)     node_features.parquet <-BIG  transaction_events (rolling)
+processed tabular pq       edges.parquet                node_embeddings   (64-d, GNN)
+model artifacts            training checkpoints         fm_embeddings     (512-d, FM)
+embeddings (~30 MB)        FM checkpoint (56 MB, LFS)   predictions / labels
+MLflow tracking+registry   (regenerated, never pushed)  drift_metrics
 ```
 
 #### Why the full history cannot live in Postgres
@@ -256,10 +258,11 @@ archive).
 |---|---|---|
 | `transaction_events` (narrow, rolling ~30d, cap 500k) | 40 B payload + 2 indexes | ~74 MB |
 | `node_embeddings` (~102k x vector(64)) | ~330 B/row | ~34 MB |
+| `fm_embeddings` (~2k x vector(512)) | ~2.1 KB/row | ~4 MB |
 | `predictions` (cap 200k) | ~100 B/row | ~20 MB |
 | `labels` | ~50 B/row | ~10 MB |
 | `drift_metrics`, `job_watermarks` | negligible | ~2 MB |
-| **Total hot store** | | **~140 MB** (3.5x headroom) |
+| **Total hot store** | | **~145 MB** (3.4x headroom) |
 
 Levers if it gets tight: `halfvec(64)` instead of `vector(64)` halves embeddings;
 drop `city`/`errors` from the hot table (velocity does not use them).
@@ -360,6 +363,39 @@ Each phase ends with something that runs. Don't start the next until the current
 - [ ] `precompute_embeddings.py` → upsert user/merchant embeddings to Supabase
 - **Done when:** embeddings are in Postgres with `computed_at` + `model_version`.
 
+### Phase 3.5 — Foundation model challenger (Lightning AI)
+
+Source: https://github.com/oluwadunni1/transaction-foundation-model -- a decoder-only
+Llama (~29M params) pretrained on TabFormer sequences via causal LM, used as a frozen
+feature extractor (last-token pooling -> 512-d embeddings -> XGBoost).
+
+- [ ] **Do NOT pretrain.** The repo ships a 56 MB checkpoint via Git LFS; pretraining
+      needs 8x A100 and would burn the entire Lightning budget. Forward pass only.
+- [ ] Check the checkpoint format first. If it loads as standard Llama in plain
+      `transformers`, skip the NeMo container entirely -- that is a pip install versus
+      a multi-GB image, and it keeps the CPU-servable story intact.
+- [ ] Extract user-level embeddings -> `fm_embeddings` table (vector(512))
+- [ ] Train the downstream head; log to MLflow as a **challenger**, not a champion
+- [ ] Record serving profile alongside accuracy: this model can run precomputed
+      (stale, cheap) *or* live (fresh, slower). Measure both -- it is a real tradeoff.
+- **Done when:** three models sit in the registry with comparable metrics, and the
+  challenger is servable through the same `/predict` contract as the champion.
+
+#### Why this is cheap to add
+Both approaches have an **identical serving contract**: precompute embeddings offline,
+store, look up per request, feed a downstream head. That is the seam the architecture
+already has, so nothing needs redesigning. What differs is only the inductive bias.
+
+| | GNN | Foundation model |
+|---|---|---|
+| Learns from | relational structure (who transacts with whom) | sequential structure (order of a user's transactions) |
+| Embedding | 64-d, users + merchants | 512-d, **users only** |
+| Storage | ~34 MB | ~4 MB (2k users x 512 floats) |
+
+> **Asymmetry to plan for, not discover in Phase 4:** the GNN yields user *and* merchant
+> embeddings; the sequence model yields user embeddings only. The assembled feature
+> vectors differ. `store.py` must handle both shapes.
+
 ### Phase 4 — Serving API
 - [ ] FastAPI: `/predict`, `/explain`, `/health`, `/metrics`
 - [ ] Embedding lookup + **cold-start fallback path**
@@ -379,13 +415,32 @@ Each phase ends with something that runs. Don't start the next until the current
 - [ ] **Staleness experiment** (see §6.2)
 - **Done when:** artificially drifted traffic shows up as a NannyML estimated-perf drop.
 
-### Phase 6 — Containerize & deploy
+### Phase 6 — CI/CD, model swapping & deploy
+
+With two genuinely competing models the registry stops being ceremony and becomes the
+centre of the project. This is where that pays off.
+
 - [ ] `Dockerfile.api` (slim, multi-stage), `Dockerfile.jobs`
-- [ ] Compose: api + mlflow + dashboard + scheduler
-- [ ] k6/locust load test → throughput + p50/p95/p99
+- [ ] Compose: api + dashboard + scheduler
+- [ ] **Shadow mode** -- challenger scores every request alongside champion; only the
+      champion's decision is used, both are logged. Highest value-per-unit-work item in
+      the project: real-traffic comparison at zero risk.
+- [ ] **Promotion gate in CI** -- challenger must beat champion on held-out AUC-PR
+      before it can be promoted. Automated and auditable.
+- [ ] **Registry-driven swap** -- flip the MLflow stage, the API picks up the new
+      champion with no redeploy. This is the demo moment.
+- [ ] **Rollback path** -- NannyML degradation alert -> revert to previous champion
+- [ ] k6/locust load test -> throughput + p50/p95/p99, per model
+- [ ] GitHub Actions: lint, test, `dvc repro` on a sample, eval, build/push image
 - [ ] Deploy API to cloud; schedule jobs
-- [ ] GitHub Actions CI
-- **Done when:** there's a public URL scoring live transactions.
+- **Done when:** swapping the champion in the registry changes live scoring behaviour
+  without a redeploy, and CI blocks a promotion that fails the gate.
+
+> **Deliberately NOT adding a full orchestrator.** Airflow/Dagster/Prefect-server means
+> running a scheduler, a webserver and a metadata DB -- substantial infra for a demo and
+> the classic overengineering trap. The DVC DAG already expresses the pipeline; GitHub
+> Actions scheduled workflows plus a cron container cover the recurring jobs. If an
+> orchestration UI is wanted, **Prefect Cloud free tier** gives it with zero infra.
 
 ### Phase 7 — Demo & docs
 - [ ] Streamlit: replay stream, live scores, drift charts, latency, staleness curve
@@ -393,8 +448,6 @@ Each phase ends with something that runs. Don't start the next until the current
 - **Done when:** a stranger can follow the README end to end.
 
 ### Phase 8 — Stretch
-- [ ] **Second NVIDIA/TabFormer model** — ⚠️ *repo link pending, paste here:* `________`
-      Slots in as another `train_*` DVC stage + MLflow run; no restructuring needed.
 - [ ] Neo4j/Memgraph purely as a visual graph explorer (presentation asset, not compute)
 - [ ] Tiered refresh (hot entities hourly, long tail weekly)
 
@@ -432,6 +485,11 @@ Naming these reads stronger than letting a reviewer find them:
 4. **Single-node throughput** — no Kafka, no horizontal scale story.
 5. We **do not reproduce NVIDIA's numbers** — different framework, CPU serving, different
    feature pipeline. This is inspired by the blueprint, not a reimplementation of it.
+6. **The models are reference implementations, not original work.** The graph approach is
+   ported from the blueprint and the foundation model is a pretrained NVIDIA checkpoint
+   used frozen. The original contribution is the platform: the pipeline, serving
+   architecture, monitoring, and the champion/challenger comparison between them. Say this
+   plainly rather than letting a reviewer infer it.
 
 ---
 
