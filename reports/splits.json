@@ -1,0 +1,102 @@
+{
+  "source": "/teamspace/studios/this_studio/financial-fraud-detection/data/processed",
+  "splits": {
+    "train": {
+      "years": [
+        1991,
+        1992,
+        1993,
+        1994,
+        1995,
+        1996,
+        1997,
+        1998,
+        1999,
+        2000,
+        2001,
+        2002,
+        2003,
+        2004,
+        2005,
+        2006,
+        2007,
+        2008,
+        2009,
+        2010,
+        2011,
+        2012,
+        2013,
+        2014,
+        2015,
+        2016,
+        2017
+      ],
+      "rows": 20604847,
+      "fraud": 25179,
+      "fraud_rate": 0.0012219940288806803,
+      "ts_min": "1991-01-02 07:10:00",
+      "ts_max": "2017-12-31 23:59:00",
+      "txn_id_min": 0,
+      "txn_id_max": 24383411
+    },
+    "val": {
+      "years": [
+        2018
+      ],
+      "rows": 1721615,
+      "fraud": 2491,
+      "fraud_rate": 0.0014468972447382255,
+      "ts_min": "2018-01-01 00:03:00",
+      "ts_max": "2018-12-31 23:58:00",
+      "txn_id_min": 4540,
+      "txn_id_max": 24385067
+    },
+    "test": {
+      "years": [
+        2019,
+        2020
+      ],
+      "rows": 2060438,
+      "fraud": 2087,
+      "fraud_rate": 0.0010128914337631126,
+      "ts_min": "2019-01-01 00:02:00",
+      "ts_max": "2020-02-28 23:58:00",
+      "txn_id_min": 4776,
+      "txn_id_max": 24386899
+    }
+  },
+  "test_variants": {
+    "headline": {
+      "name": "test_2019_only",
+      "years": [
+        2019
+      ],
+      "rows": 1723938,
+      "fraud": 2087,
+      "fraud_rate": 0.0012106003812202063,
+      "ts_min": "2019-01-01 00:02:00",
+      "ts_max": "2019-12-31 23:59:00",
+      "txn_id_min": 4776,
+      "txn_id_max": 24386731,
+      "use_for": "AUC-PR -- the clean model-quality comparison"
+    },
+    "operating_point": {
+      "name": "test_full",
+      "years": [
+        2019,
+        2020
+      ],
+      "rows": 2060438,
+      "fraud": 2087,
+      "fraud_rate": 0.0010128914337631126,
+      "ts_min": "2019-01-01 00:02:00",
+      "ts_max": "2020-02-28 23:58:00",
+      "txn_id_min": 4776,
+      "txn_id_max": 24386899,
+      "use_for": "precision@k, alert volume, recall at fixed FPR"
+    }
+  },
+  "total_rows": 24386900,
+  "passed": true,
+  "failures": []
+}

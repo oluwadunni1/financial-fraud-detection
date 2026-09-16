@@ -7,11 +7,31 @@ paths:
   processed: data/processed
   graph: data/graph
   models: data/models
+  # Stage outputs. The manifest defines the temporal split; the split is a
+  # predicate over the year-partitioned Parquet, not three copies of the data.
+  # Reports live outside data/processed: that directory is the ingest stage's
+  # output, and DVC rejects one stage's out nested inside another's.
+  splits_manifest: reports/splits.json
+  validation_report: reports/validation_report.json
+  sample: data/sample/transactions.parquet
 
 ingest:
   # Row-group size for Parquet output; tuned for streaming reads during training.
   row_group_size: 1_000_000
   partition_on: Year
+  # Rows per streaming batch. The 2.35 GB CSV is never materialised whole:
+  # batches are read, transformed, and routed to per-year Parquet writers in a
+  # single pass. Keeps peak memory flat on a 14 GB machine.
+  batch_rows: 500_000
+  # Validate every raw batch against RawTransactionSchema rather than sampling.
+  # Costs time; buys the guarantee that all 24.4M rows were actually checked.
+  validate_raw: true
+
+sample:
+  # Small stratified subset so tests and CI can run the whole DAG in seconds
+  # instead of against 2.35 GB. Committed to git -- keep it small.
+  n_rows: 200_000
+  random_state: 42
 
 split:
   # Temporal split. NEVER random -- transactions are time-ordered and a random

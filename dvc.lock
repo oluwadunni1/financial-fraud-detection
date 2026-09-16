@@ -1,0 +1,128 @@
+schema: '2.0'
+stages:
+  ingest:
+    cmd: .venv/bin/python -m fraud.data.ingest
+    deps:
+    - path: data/TabFormer/raw/card_transaction.v1.csv
+      hash: md5
+      md5: 5d0f027f333e8ec7d58969a7b8a206f8
+      size: 2354626737
+      isexec: true
+    - path: src/fraud/config.py
+      hash: md5
+      md5: 15b58a3afbc5288c8e2113506e439a84
+      size: 1196
+    - path: src/fraud/data/ingest.py
+      hash: md5
+      md5: f6ca81ef53cb04a534481764676f0b40
+      size: 9532
+    - path: src/fraud/data/schemas.py
+      hash: md5
+      md5: da96c5678d4acd600d5b30950af885aa
+      size: 6683
+      isexec: true
+    params:
+      params.yaml:
+        ingest:
+          row_group_size: 1000000
+          partition_on: Year
+          batch_rows: 500000
+          validate_raw: true
+        paths.processed: data/processed
+        paths.raw_csv: data/TabFormer/raw/card_transaction.v1.csv
+    outs:
+    - path: data/processed
+      hash: md5
+      md5: 3967e7aa9b864da7a3802222d282d56c.dir
+      size: 563670306
+      nfiles: 30
+  validate:
+    cmd: .venv/bin/python -m fraud.data.validate
+    deps:
+    - path: data/processed
+      hash: md5
+      md5: 3967e7aa9b864da7a3802222d282d56c.dir
+      size: 563670306
+      nfiles: 30
+    - path: src/fraud/config.py
+      hash: md5
+      md5: 15b58a3afbc5288c8e2113506e439a84
+      size: 1196
+    - path: src/fraud/data/schemas.py
+      hash: md5
+      md5: da96c5678d4acd600d5b30950af885aa
+      size: 6683
+      isexec: true
+    - path: src/fraud/data/validate.py
+      hash: md5
+      md5: 735a3d6a0fed106b542d237fb61a6980
+      size: 6631
+    params:
+      params.yaml:
+        paths.processed: data/processed
+        paths.validation_report: reports/validation_report.json
+        validation:
+          fraud_rate_min: 0.0005
+          fraud_rate_max: 0.005
+          expected_row_count_min: 20000000
+    outs:
+    - path: reports/validation_report.json
+      hash: md5
+      md5: 082904b5703016af66042f2bc4d916b1
+      size: 2297
+  split:
+    cmd: .venv/bin/python -m fraud.data.split
+    deps:
+    - path: data/processed
+      hash: md5
+      md5: 3967e7aa9b864da7a3802222d282d56c.dir
+      size: 563670306
+      nfiles: 30
+    - path: src/fraud/config.py
+      hash: md5
+      md5: 15b58a3afbc5288c8e2113506e439a84
+      size: 1196
+    - path: src/fraud/data/split.py
+      hash: md5
+      md5: f796c5b8bd1914b9ccd2848259845e52
+      size: 6355
+    params:
+      params.yaml:
+        paths.processed: data/processed
+        paths.splits_manifest: reports/splits.json
+        split:
+          train_end_year: 2017
+          val_year: 2018
+    outs:
+    - path: reports/splits.json
+      hash: md5
+      md5: 3c649bd1cbd23f6cbdda3e04abaff160
+      size: 2191
+  sample:
+    cmd: .venv/bin/python -m fraud.data.sample
+    deps:
+    - path: data/processed
+      hash: md5
+      md5: 3967e7aa9b864da7a3802222d282d56c.dir
+      size: 563670306
+      nfiles: 30
+    - path: src/fraud/config.py
+      hash: md5
+      md5: 15b58a3afbc5288c8e2113506e439a84
+      size: 1196
+    - path: src/fraud/data/sample.py
+      hash: md5
+      md5: 0fc6d8775e86b0bc5aba66b52d9a457a
+      size: 2710
+    params:
+      params.yaml:
+        paths.processed: data/processed
+        paths.sample: data/sample/transactions.parquet
+        sample:
+          n_rows: 200000
+          random_state: 42
+    outs:
+    - path: data/sample/transactions.parquet
+      hash: md5
+      md5: 53af6355b9a8285d79364e2d98c406a8
+      size: 4076046

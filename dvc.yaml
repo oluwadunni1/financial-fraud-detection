@@ -1,0 +1,70 @@
+# The pipeline. If it is not a stage here, it is not the pipeline.
+#
+# Run: .venv/bin/dvc repro
+# The split is a manifest over year-partitioned Parquet, not three copies of
+# the data -- see reports/splits.json and src/fraud/data/split.py.
+
+stages:
+  ingest:
+    desc: Raw TabFormer CSV -> year-partitioned Parquet, one streaming pass.
+    cmd: .venv/bin/python -m fraud.data.ingest
+    deps:
+      - data/TabFormer/raw/card_transaction.v1.csv
+      - src/fraud/config.py
+      - src/fraud/data/ingest.py
+      - src/fraud/data/schemas.py
+    params:
+      - paths.raw_csv
+      - paths.processed
+      - ingest
+    outs:
+      - data/processed
+
+  validate:
+    desc: Schema + dataset gates. A corrupted row must fail the build here.
+    cmd: .venv/bin/python -m fraud.data.validate
+    deps:
+      - data/processed
+      - src/fraud/config.py
+      - src/fraud/data/schemas.py
+      - src/fraud/data/validate.py
+    params:
+      - paths.processed
+      - paths.validation_report
+      - validation
+    outs:
+      # cache: false -- small JSON, more useful diffable in git than in the
+      # DVC cache, and CI can read it without a remote to pull from.
+      - reports/validation_report.json:
+          cache: false
+
+  split:
+    desc: Temporal split manifest, with the no-leakage assertions.
+    cmd: .venv/bin/python -m fraud.data.split
+    deps:
+      - data/processed
+      - src/fraud/config.py
+      - src/fraud/data/split.py
+    params:
+      - paths.processed
+      - paths.splits_manifest
+      - split
+    outs:
+      - reports/splits.json:
+          cache: false
+
+  sample:
+    desc: Small stratified subset so tests and CI can run the DAG in seconds.
+    cmd: .venv/bin/python -m fraud.data.sample
+    deps:
+      - data/processed
+      - src/fraud/config.py
+      - src/fraud/data/sample.py
+    params:
+      - paths.processed
+      - paths.sample
+      - sample
+    outs:
+      # Committed to git: with no DVC remote, this is the only way CI gets data.
+      - data/sample/transactions.parquet:
+          cache: false

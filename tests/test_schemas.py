@@ -125,6 +125,17 @@ def test_negative_merchant_id_accepted():
 def clean_frame(n: int = 4, **overrides) -> pd.DataFrame:
     df = pd.DataFrame(
         {
+            # Minted by ingest: the row's index in the original CSV, plus the
+            # timestamp assembled from Year/Month/Day/Time.
+            "txn_id": pd.Series([0, 1, 2, 3][:n], dtype="int64"),
+            "ts": pd.to_datetime(
+                [
+                    "2002-09-01 06:21",
+                    "2013-01-31 23:59",
+                    "2018-12-25 00:05",
+                    "2019-06-15 12:00",
+                ][:n]
+            ),
             "User": pd.Series([0, 0, 1, 1][:n], dtype="int64"),
             "Card": pd.Series([0, 1, 0, 0][:n], dtype="int64"),
             "Year": pd.Series([2002, 2013, 2018, 2019][:n], dtype="int64"),
@@ -188,3 +199,18 @@ def test_check_fraud_rate_rejects_out_of_band(frauds):
 def test_shipped_csv_header_matches_raw_columns():
     header = pd.read_csv(RAW_CSV, nrows=0).columns.tolist()
     assert header == RAW_COLUMNS
+
+
+def test_clean_frame_rejects_duplicate_txn_id():
+    """txn_id is a primary key downstream -- duplicates must not pass."""
+    df = clean_frame()
+    df.loc[1, "txn_id"] = df.loc[0, "txn_id"]
+    with pytest.raises(SCHEMA_ERRORS):
+        CleanTransactionSchema.validate(df, lazy=True)
+
+
+def test_clean_frame_rejects_null_timestamp():
+    df = clean_frame()
+    df.loc[0, "ts"] = pd.NaT
+    with pytest.raises(SCHEMA_ERRORS):
+        CleanTransactionSchema.validate(df, lazy=True)

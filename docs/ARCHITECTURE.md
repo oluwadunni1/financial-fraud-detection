@@ -44,7 +44,7 @@ can't see inside. Rebuilding the GNN in open PyG is the entire point of the exer
 
 ## 2. Where we are right now
 
-**Phase 0 complete (2026-09-16).** Every number in this doc that was previously an
+**Phases 0 and 1 complete (2026-09-16).** Every number in this doc that was previously an
 estimate has been replaced by a measurement against the real file. Where a figure is
 still derived rather than observed, it says so.
 
@@ -52,7 +52,8 @@ still derived rather than observed, it says so.
 |---|---|
 | Repo | Fork at `github.com/oluwadunni1/financial-fraud-detection`, branch `mlops-platform` |
 | Scaffolded | `pyproject.toml`, `params.yaml`, `src/fraud/`, `sql/*.sql`, `tests/`, this doc |
-| Data | **Downloaded and DVC-tracked.** 24,386,900 rows, 2.35 GB, md5 `5d0f027f333e8ec7d58969a7b8a206f8` |
+| Data | **Downloaded, DVC-tracked, and processed.** 24,386,900 rows; 2.35 GB CSV -> 538 MB Parquet |
+| Pipeline | **`dvc repro` runs end to end**: `ingest` -> `validate` / `split` / `sample` |
 | Dev machine | Lightning AI Studio -- Linux, 14 GB RAM, 4 vCPU, **no GPU** (correct for Phases 0-2) |
 | Python env | `.venv` on CPython 3.12.13. **Invoke as `.venv/bin/python`** -- see 10.1 |
 | GPU | Lightning credits available; needed only for Phase 3 |
@@ -461,12 +462,34 @@ Each phase ends with something that runs. Don't start the next until the current
 
 Re-check any time with `.venv/bin/python scripts/verify_services.py` (11 checks).
 
-### Phase 1 — Data & validation
-- [ ] `ingest.py`: CSV → Parquet partitioned by year
-- [ ] Pandera schemas: types, ranges, nullability, **fraud rate sanity bound**
-- [ ] Temporal split (train <2018 / val 2018 / test >2018) — assert no leakage
-- [ ] DVC stages: `ingest` → `validate` → `split`
+### Phase 1 — Data & validation — **COMPLETE (2026-09-16)**
+- [x] `ingest.py`: CSV -> Parquet partitioned by year (one streaming pass, 33.6s, 48 batches)
+- [x] Pandera schemas in the build path: raw validated per batch, clean per partition
+- [x] Temporal split (train <=2017 / val 2018 / test >=2019) with no-leakage assertions
+- [x] DVC stages: `ingest` -> `validate` / `split` / `sample`
+- [x] `sample` stage: 200,004-row stratified subset, 4.1 MB, committed to git for CI
 - **Done when:** `dvc repro` runs clean, and a deliberately corrupted row fails the build.
+  **Met** -- both verified, including the negative test.
+
+Outputs: `data/processed/Year=1991..2020` (538 MB Parquet, down from 2.35 GB CSV),
+`reports/validation_report.json`, `reports/splits.json`,
+`data/sample/transactions.parquet`.
+
+| Split | Years | Rows | Fraud | Rate |
+|---|---|---|---|---|
+| train | 1991-2017 | 20,604,847 | 25,179 | 0.122% |
+| val | 2018 | 1,721,615 | 2,491 | 0.145% |
+| test | 2019-2020 | 2,060,438 | 2,087 | 0.101% |
+
+> **Evaluation note.** 2020 is kept (336,500 rows, zero positives) because the extra
+> negatives make the false-positive burden realistic and give Phase 4/5 a long stretch of
+> replay traffic. It is not metric-neutral: it drops test prevalence from 0.121% to 0.101%.
+> So headline **AUC-PR is 2019-only**, while precision@k, alert volume and recall at fixed
+> FPR use 2019+2020. `reports/splits.json` records both under `test_variants`.
+
+> **Load splits via `fraud.data.split.load_split(name)`.** The split is a manifest plus a
+> predicate over the year-partitioned Parquet, not three copies of the data. Hand-writing a
+> year filter is how an accidental random split gets in.
 
 ### Phase 2 — Baseline model
 - [ ] Port tabular feature engineering (cuDF → pandas/polars)

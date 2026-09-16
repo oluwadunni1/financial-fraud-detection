@@ -12,6 +12,12 @@ data/TabFormer/raw/*
 # The .dvc pointers ARE committed -- they are how the data is versioned.
 !data/TabFormer/raw/*.dvc
 
+# The CI sample IS committed: with no DVC remote, git is the only way CI gets
+# data. Same re-inclusion chain as above.
+!data/sample/
+data/sample/*
+!data/sample/transactions.parquet
+
 # checkpoint
 .ipynb_checkpoints
 notebooks/.ipynb_checkpoints

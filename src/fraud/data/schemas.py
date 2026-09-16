@@ -117,6 +117,18 @@ class RawTransactionSchema(pa.DataFrameModel):
 class CleanTransactionSchema(pa.DataFrameModel):
     """Validates the post-ingest frame: typed, renamed, markers applied."""
 
+    # Synthetic primary key: the row's index in the original CSV. TabFormer has
+    # no natural key -- (User, Card, Year, Month, Day, Time) collides on 142,010
+    # rows because timestamps are minute-resolution, and 66 rows are exact
+    # duplicates. `predictions`, `labels` and `transaction_events` all key on
+    # this (see sql/001_init.sql), so it must be stable across re-ingests.
+    txn_id: Series[int] = pa.Field(ge=0, unique=True)
+
+    # Full event timestamp assembled from Year/Month/Day/Time. Every one of the
+    # 24,386,900 rows yields a valid datetime (verified), spanning
+    # 1991-01-02 07:10 to 2020-02-28 23:58. Velocity windows depend on it.
+    ts: Series[pd.Timestamp] = pa.Field(nullable=False)
+
     User: Series[int] = pa.Field(ge=0)
     Card: Series[int] = pa.Field(ge=0)
     Year: Series[int] = pa.Field(ge=1990, le=2030)

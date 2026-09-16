@@ -27,8 +27,8 @@ phases; section 10 is the Lightning AI setup.
 
 ## Current state (update as phases complete)
 
-**Phase 0 complete (2026-09-16)**, except two credential-blocked checks. Nothing runs end
-to end yet -- there is still no `dvc.yaml`; that is Phase 1.
+**Phase 1 complete (2026-09-16).** `dvc repro` now runs the whole pipeline from the raw
+CSV. Next up is Phase 2 (feature engineering + the XGBoost baseline).
 
 | | Status |
 |---|---|
@@ -36,10 +36,12 @@ to end yet -- there is still no `dvc.yaml`; that is Phase 1.
 | TabFormer data downloaded | **Yes** -- 24,386,900 rows, 2.35 GB, DVC-tracked |
 | Python env installed | **Yes** -- `.venv`, CPython 3.12.13, `[dev]` extras |
 | Schemas validated against real data | **Yes** -- `Amount` regex bug found and fixed |
-| Tests | **Yes** -- `tests/test_schemas.py`, 26 passing |
 | DVC initialised | **Yes** -- local cache, **no remote** (deliberate, see below) |
 | DagsHub repo + token | **Verified** -- tracking + Model Registry both work |
 | Supabase project + `sql/*.sql` applied | **Done** -- eu-west-1, pgvector + 7 tables verified |
+| Pipeline (`dvc.yaml`) | **Done** -- `ingest` -> `validate` / `split` / `sample` |
+| Processed data | **Done** -- 30 year partitions, 538 MB Parquet (from 2.35 GB CSV) |
+| Tests | **50 passing** (`test_schemas`, `test_ingest`, `test_split`) |
 
 Measured dataset facts now live in `docs/ARCHITECTURE.md` section 2.1. Read that before
 writing any feature code -- several of them contradict what the scaffolding assumed.
@@ -54,9 +56,11 @@ These were settled deliberately. Reopen only if new evidence appears.
 3. **Serving uses precomputed embeddings + live velocity features**, not live neighbourhood
    lookup. Frozen user/merchant embeddings from Postgres, plus velocity aggregates computed
    live in SQL. See ARCHITECTURE.md section 3.1 for why.
-4. **Supabase is a rolling hot store, not an archive.** Full 24M-row history stays in
-   Parquet on the DVC remote. Free tier is 500 MB; the full table is ~5.6 GB.
-5. **MLflow and DVC are hosted on DagsHub.**
+4. **Supabase is a rolling hot store, not an archive.** The full 24.4M-row history stays
+   in DVC-tracked Parquet (`data/processed/`, 538 MB). Free tier is 500 MB; the full table
+   plus indexes measures ~6.2 GB, 12.4x over.
+5. **MLflow is hosted on DagsHub.** DVC is not -- see decision 10, which supersedes the
+   earlier "DVC remote on DagsHub" plan.
 6. **XGBoost baseline ships before the GNN**, so serving/monitoring/deploy phases are not
    blocked behind GPU work.
 7. **Pandera over Great Expectations** — same value, far less config.
@@ -75,6 +79,14 @@ These were settled deliberately. Reopen only if new evidence appears.
 11. **The 2016+ GNN subsample stays, but the storage justification is dead.** The feature
    matrix measures 7.32 GB fp32, not the estimated 9.6 GB, and there is no DagsHub ceiling
    to hit any more. Justify the subsample on modelling grounds only.
+12. **2020 stays in the test set, but metrics are reported two ways.** Its 336,500 rows
+   carry zero positives, so including them drops test prevalence from 0.121% to 0.101% and
+   lowers precision at any threshold -- a movement unrelated to model quality. Headline
+   **AUC-PR is 2019-only**; precision@k, alert volume and recall-at-fixed-FPR use
+   2019+2020. Both variants are recorded in `reports/splits.json` under `test_variants`.
+13. **The split is a manifest, not three copies of the data.** Year-partitioned Parquet
+   makes a split a predicate resolved by partition pruning. Always load a split via
+   `fraud.data.split.load_split(name)`; never hand-write a year filter.
 
 ## Conventions
 
@@ -115,6 +127,11 @@ These were settled deliberately. Reopen only if new evidence appears.
   explicit `dtype=`; a silent `object` column will break validation in confusing ways.
 - **Do not load the full graph onto the GPU.** Use PyG `NeighborLoader`; features stay in
   CPU RAM and are gathered per batch.
+- **`txn_id` is synthetic and order-dependent.** It is the row's index in the original CSV,
+  assigned in one sequential pass. There is no natural key: `(User, Card, Year, Month, Day,
+  Time)` collides on 142,010 rows and 66 rows are exact duplicates. Anything that reorders
+  or filters rows before ingest silently renumbers every transaction -- and `predictions`,
+  `labels` and `transaction_events` all key on it.
 - **`source .venv/bin/activate` does NOT change which `python` runs.** The shell profile
   activates conda and zsh caches the lookup, so a bare `python` silently stays on
   `/home/zeus/miniconda3/envs/cloudspace/bin/python` even though `which python` says
@@ -140,8 +157,9 @@ uv pip install --python .venv/bin/python -e ".[dev]"   # add api,gnn,monitoring 
 # Always invoke the venv explicitly -- activate is not enough here (see gotchas).
 .venv/bin/python -m pytest                         # tests
 .venv/bin/python -m ruff check src tests scripts   # lint
-.venv/bin/dvc data status                          # tracked data clean? (no dvc.yaml yet)
-.venv/bin/dvc repro                                # the pipeline (Phase 1 onward)
+.venv/bin/dvc data status                          # tracked data clean?
+.venv/bin/dvc repro                                # the pipeline: ingest/validate/split/sample
+.venv/bin/dvc dag                                  # show the DAG
 .venv/bin/python scripts/verify_services.py        # DagsHub + Supabase, 11 checks
 ```
 
