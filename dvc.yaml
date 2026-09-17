@@ -68,3 +68,100 @@ stages:
       # Committed to git: with no DVC remote, this is the only way CI gets data.
       - data/sample/transactions.parquet:
           cache: false
+
+  velocity:
+    desc: >
+      Per-user aggregates over strictly-earlier transactions. Shared with the
+      serving path -- see src/fraud/features/velocity.py.
+    cmd: .venv/bin/python -m fraud.features.build_velocity
+    deps:
+      - data/processed
+      - src/fraud/config.py
+      - src/fraud/features/build_velocity.py
+      - src/fraud/features/velocity.py
+    params:
+      - paths.processed
+      - paths.velocity
+      - velocity
+    outs:
+      - data/features/velocity
+
+  features:
+    desc: Encoder fitted on TRAIN ONLY, applied to every split.
+    cmd: .venv/bin/python -m fraud.features.build
+    deps:
+      - data/features/velocity
+      - data/processed
+      - src/fraud/config.py
+      - src/fraud/data/split.py
+      - src/fraud/features/build.py
+      - src/fraud/features/encoders.py
+    params:
+      - paths.processed
+      - paths.velocity
+      - paths.feature_matrix
+      - paths.encoder
+      - features
+      - velocity.windows_hours
+      - split
+    outs:
+      - data/features/matrix
+      - data/features/encoder.json
+
+  train_xgb:
+    desc: Baseline champion. Batch-loaded so the matrix is never resident whole.
+    cmd: .venv/bin/python -m fraud.models.xgb
+    deps:
+      - data/features/matrix
+      - src/fraud/config.py
+      - src/fraud/data/split.py
+      - src/fraud/models/xgb.py
+    params:
+      - paths.feature_matrix
+      - paths.models
+      - xgboost
+      - split
+    outs:
+      - data/models/xgb
+
+  evaluate:
+    desc: >
+      Threshold chosen on val, applied unchanged to test. Test reported twice:
+      2019-only for headline AUC-PR, 2019+2020 for operating point.
+    cmd: .venv/bin/python -m fraud.models.evaluate
+    deps:
+      - data/features/matrix
+      - data/models/xgb
+      - src/fraud/config.py
+      - src/fraud/models/evaluate.py
+      - src/fraud/models/metrics.py
+    params:
+      - paths.feature_matrix
+      - paths.models
+      - paths.metrics_report
+      - evaluate
+      - split
+    outs:
+      - reports/metrics_xgb.json:
+          cache: false
+
+  register:
+    desc: >
+      Log to MLflow and set the `champion` alias. The ONLY stage needing network
+      access and credentials -- CI without them should run `dvc repro evaluate`.
+    cmd: .venv/bin/python -m fraud.models.registry
+    deps:
+      - data/features/encoder.json
+      - data/models/xgb
+      - reports/metrics_xgb.json
+      - src/fraud/config.py
+      - src/fraud/models/registry.py
+    params:
+      - paths.models
+      - paths.encoder
+      - paths.metrics_report
+      - paths.registry_report
+      - mlflow
+    outs:
+      - reports/registry.json:
+          cache: false

@@ -491,11 +491,94 @@ Outputs: `data/processed/Year=1991..2020` (538 MB Parquet, down from 2.35 GB CSV
 > predicate over the year-partitioned Parquet, not three copies of the data. Hand-writing a
 > year filter is how an accidental random split gets in.
 
-### Phase 2 — Baseline model
-- [ ] Port tabular feature engineering (cuDF → pandas/polars)
-- [ ] XGBoost + MLflow logging: AUC-PR, precision@k, recall at fixed FPR, confusion matrix
-- [ ] Register to Model Registry, promote to `Production`
-- **Done when:** a champion exists in the registry with real metrics.
+### Phase 2 — Baseline model — **COMPLETE (2026-09-17)**
+- [x] Ported tabular feature engineering (cuDF -> polars), logic not library
+- [x] Velocity features, brought forward from Phase 4 (see below)
+- [x] `scale_pos_weight` chosen on val by sweep, not guessed
+- [x] XGBoost + MLflow logging: AUC-PR, precision@k, recall at fixed FPR, confusion matrix
+- [x] Registered as `fraud-champion` v1 under the `champion` alias
+- **Done when:** a champion exists in the registry with real metrics. **Met.**
+
+Load it with `mlflow.pyfunc.load_model("models:/fraud-champion@champion")`.
+
+#### Results
+
+86 features, `scale_pos_weight=10`, best iteration 228, threshold 0.0360 (val @ 1% FPR).
+
+| Split | Rows | Positives | Base rate | AUC-PR | AUC-ROC | P@100 | P@1000 |
+|---|---|---|---|---|---|---|---|
+| val (2018) | 1,721,615 | 2,491 | 0.00145 | 0.5181 | 0.9974 | 1.000 | 0.709 |
+| **test 2019 (headline)** | 1,723,938 | 2,087 | 0.00121 | **0.3190** | 0.9973 | 0.450 | 0.449 |
+| test 2019+2020 | 2,060,438 | 2,087 | 0.00101 | 0.2855 | 0.9974 | 0.400 | 0.413 |
+
+**Headline AUC-PR is 263x the base rate.** At the operating point the model catches 1,990
+of 2,087 frauds (95.4% recall) for 17,025 false positives.
+
+#### `scale_pos_weight` was guessed, and the guess was costly
+
+`params.yaml` shipped `scale_pos_weight: 50` under a comment claiming it was "tuned on val,
+not guessed". It was guessed. Sweeping it (`src/fraud/models/sweep.py`,
+`reports/sweep_scale_pos_weight.json`) on a prevalence-preserving subsample:
+
+| `scale_pos_weight` | val AUC-PR (sweep) |
+|---|---|
+| 1 | 0.3175 |
+| **10** | **0.3215** |
+| 50 (the guess) | 0.2714 |
+| 200 | 0.1789 |
+| 819 (full inverse prevalence) | 0.1169 |
+
+Retraining at 10 on full data:
+
+| | spw=50 | spw=10 | change |
+|---|---|---|---|
+| headline AUC-PR | 0.2481 | **0.3190** | **+29%** |
+| P@100 | 0.410 | 0.450 | +10% |
+| recall at 1% FPR | 0.873 | **0.954** | +9pp |
+| missed frauds | 265 | **97** | **-63%** |
+| training time | 40 min | 11.5 min | early stop at 228 |
+
+> **Reweighting to full inverse prevalence (819) is the worst option on the grid.** That is
+> the standard trap with extreme imbalance: "balance the classes" sounds principled and
+> destroys precision. The sweep is cheap and should be repeated for the GNN and the
+> foundation model rather than inheriting this value.
+
+> **Two traps in sweeping it.** First, a *stratified* subsample that keeps all positives
+> raises training prevalence, and `scale_pos_weight` is defined relative to that ratio -- so
+> the winner does not transfer. The sweep uses a uniform subsample for this reason.
+> Second, a low round cap flatters high weights: they converge faster on the minority class.
+> Watch a low weight look worse early and overtake -- spw=10 trailed spw=50 at round 50, and
+> had beaten its 446-round peak by round 100.
+
+#### Why ROC-AUC is never the headline
+
+The same model scores **0.997 AUC-ROC** and **0.319 AUC-PR**. The first reads as essentially
+solved; the second says under a third of the ranked alerts are real. At a 1-in-819 base rate
+ROC-AUC is dominated by the true-negative pool and flatters everything. Report it for
+comparability with published numbers, never as the headline.
+
+#### The 2020 dilution, as predicted
+
+Adding 336,500 fraud-free rows adds 3,118 false positives and zero true positives, moving
+P@100 from 0.450 to 0.400 and precision at the operating point from 0.105 to 0.090. The
+model did not change. This is why the headline is 2019-only (decision 12).
+
+> **A 1% FPR budget is loose at this volume:** ~17,000 false positives for ~2,000 catches,
+> about 9 false alarms per fraud. Precision@k is the more honest operational lens. Phase 5
+> should revisit the target rather than inherit 1% unexamined.
+
+#### Cost, measured
+
+| Stage | Wall clock | Peak RSS |
+|---|---|---|
+| `velocity` | 29s | 1.7 GB |
+| `features` | 185s | 2.8 GB |
+| `train_xgb` | 688s | 5.9 GB |
+
+Trained on CPU deliberately: the Lightning GPU budget is reserved for Phase 3, and a booster
+trained on GPU still serves on CPU, so this is a credits trade rather than a correctness
+one. `QuantileDMatrix` walks the data iterator **4 times** (sketching, then filling), which
+dominates both the wall clock and the memory.
 
 > Deliberately before the GNN: it gives a servable model early, so Phases 4–6 can proceed
 > without waiting on GPU work, and it's the honest comparison baseline.

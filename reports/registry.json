@@ -1,0 +1,9 @@
+{
+  "run_id": "e17c803eb8784a35b16ec2d6281fd6ea",
+  "registered_model": "fraud-champion",
+  "version": "1",
+  "alias": "champion",
+  "alias_resolves_to": "1",
+  "model_uri": "models:/fraud-champion@champion",
+  "headline_auc_pr": 0.3189742413884654
+}

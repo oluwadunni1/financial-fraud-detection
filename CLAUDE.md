@@ -27,8 +27,9 @@ phases; section 10 is the Lightning AI setup.
 
 ## Current state (update as phases complete)
 
-**Phase 1 complete (2026-09-16).** `dvc repro` now runs the whole pipeline from the raw
-CSV. Next up is Phase 2 (feature engineering + the XGBoost baseline).
+**Phase 2 complete (2026-09-17).** `dvc repro` runs raw CSV -> champion in the registry.
+`fraud-champion` v1 is live under the `champion` alias, headline AUC-PR **0.3190** (263x
+base rate). Next up is Phase 3 (GraphSAGE on the GPU Studio).
 
 | | Status |
 |---|---|
@@ -41,7 +42,9 @@ CSV. Next up is Phase 2 (feature engineering + the XGBoost baseline).
 | Supabase project + `sql/*.sql` applied | **Done** -- eu-west-1, pgvector + 7 tables verified |
 | Pipeline (`dvc.yaml`) | **Done** -- `ingest` -> `validate` / `split` / `sample` |
 | Processed data | **Done** -- 30 year partitions, 538 MB Parquet (from 2.35 GB CSV) |
-| Tests | **50 passing** (`test_schemas`, `test_ingest`, `test_split`) |
+| Features | **Done** -- 86 columns (69 encoded + 4 numeric + 13 velocity) |
+| Champion | **Registered** -- `models:/fraud-champion@champion`, AUC-PR 0.3190 |
+| Tests | **117 passing** across 7 files |
 
 Measured dataset facts now live in `docs/ARCHITECTURE.md` section 2.1. Read that before
 writing any feature code -- several of them contradict what the scaffolding assumed.
@@ -87,6 +90,14 @@ These were settled deliberately. Reopen only if new evidence appears.
 13. **The split is a manifest, not three copies of the data.** Year-partitioned Parquet
    makes a split a predicate resolved by partition pruning. Always load a split via
    `fraud.data.split.load_split(name)`; never hand-write a year filter.
+14. **Model promotion uses MLflow aliases, not stages.** ARCHITECTURE said "promote to
+   Production"; MLflow 3 deprecates stages. The API loads
+   `models:/fraud-champion@champion`, so swapping the champion is an alias move with no
+   redeploy. Verified working on DagsHub.
+15. **Sweep `scale_pos_weight` per model; never inherit it.** Measured on the baseline:
+   10 beats the guessed 50 by 29% headline AUC-PR and cuts missed frauds 63%. Full inverse
+   prevalence (819) is the *worst* value on the grid -- "balance the classes" is a trap
+   here. Re-sweep for the GNN and the foundation model.
 
 ## Conventions
 
@@ -127,6 +138,21 @@ These were settled deliberately. Reopen only if new evidence appears.
   explicit `dtype=`; a silent `object` column will break validation in confusing ways.
 - **Do not load the full graph onto the GPU.** Use PyG `NeighborLoader`; features stay in
   CPU RAM and are gathered per batch.
+- **Velocity is `closed="left"` offline and `ts < :now` online.** Both mean *strictly
+  earlier*, so two transactions in the same minute are mutually invisible. 142,010 rows
+  share a user and a minute, so this is not a corner case. A `<=` in the online SQL would
+  let the later of a pair see the earlier while the earlier saw nothing -- asymmetric, and
+  invisible without the skew test. See `src/fraud/features/velocity.py`.
+- **Velocity windows cross year partitions.** A 7-day window on 2018-01-02 needs December
+  2017, so velocity is computed in *user* chunks, never per year partition. Computing it
+  per partition silently zeroes every window at each year boundary.
+- **The encoder is fitted on train only and ships with the model.** Re-fitting it on a
+  different split changes what every column means. Train sees 93,298 of 100,343 merchants,
+  so ~0.46% of test rows carry an unseen merchant and encode to the reserved all-zero
+  code -- that is the cold-start path, exercised for real.
+- **`Year` is deliberately not a feature.** The split is temporal, so no training row
+  carries 2019 or 2020; a tree cannot extrapolate and every test row would land in one
+  terminal bucket. `Month` and `Day` are fine -- they recur.
 - **`txn_id` is synthetic and order-dependent.** It is the row's index in the original CSV,
   assigned in one sequential pass. There is no natural key: `(User, Card, Year, Month, Day,
   Time)` collides on 142,010 rows and 66 rows are exact duplicates. Anything that reorders

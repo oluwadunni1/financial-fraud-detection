@@ -126,3 +126,247 @@ stages:
       hash: md5
       md5: 53af6355b9a8285d79364e2d98c406a8
       size: 4076046
+  velocity:
+    cmd: .venv/bin/python -m fraud.features.build_velocity
+    deps:
+    - path: data/processed
+      hash: md5
+      md5: 3967e7aa9b864da7a3802222d282d56c.dir
+      size: 563670306
+      nfiles: 30
+    - path: src/fraud/config.py
+      hash: md5
+      md5: 15b58a3afbc5288c8e2113506e439a84
+      size: 1196
+      isexec: true
+    - path: src/fraud/features/build_velocity.py
+      hash: md5
+      md5: 77b326a2a3e0838e23e15266eb217bc6
+      size: 4910
+    - path: src/fraud/features/velocity.py
+      hash: md5
+      md5: 32634110b4f451a95ba4a086c2e8b031
+      size: 5030
+    params:
+      params.yaml:
+        paths.processed: data/processed
+        paths.velocity: data/features/velocity
+        velocity:
+          windows_hours:
+          - 1
+          - 24
+          - 168
+          users_per_chunk: 250
+    outs:
+    - path: data/features/velocity
+      hash: md5
+      md5: 9c11275a4a7c03589a873f86ca535596.dir
+      size: 623131662
+      nfiles: 227
+  features:
+    cmd: .venv/bin/python -m fraud.features.build
+    deps:
+    - path: data/features/velocity
+      hash: md5
+      md5: 9c11275a4a7c03589a873f86ca535596.dir
+      size: 623131662
+      nfiles: 227
+    - path: data/processed
+      hash: md5
+      md5: 3967e7aa9b864da7a3802222d282d56c.dir
+      size: 563670306
+      nfiles: 30
+    - path: src/fraud/config.py
+      hash: md5
+      md5: 15b58a3afbc5288c8e2113506e439a84
+      size: 1196
+      isexec: true
+    - path: src/fraud/data/split.py
+      hash: md5
+      md5: f796c5b8bd1914b9ccd2848259845e52
+      size: 6355
+      isexec: true
+    - path: src/fraud/features/build.py
+      hash: md5
+      md5: aca019c300d587f000c714afc0317aba
+      size: 5411
+    - path: src/fraud/features/encoders.py
+      hash: md5
+      md5: de469dbd17cccdc6fc4c6924fe09d9ba
+      size: 7511
+    params:
+      params.yaml:
+        features:
+          one_hot_max_cardinality: 8
+          unknown_string_marker: XX
+          unknown_zip_code: 0
+          categorical:
+          - Merchant
+          - Zip
+          - City
+          - State
+          - MCC
+          - Errors
+          - Chip
+          numeric:
+          - Amount
+          - Time
+          - Month
+          - Day
+        paths.encoder: data/features/encoder.json
+        paths.feature_matrix: data/features/matrix
+        paths.processed: data/processed
+        paths.velocity: data/features/velocity
+        split:
+          train_end_year: 2017
+          val_year: 2018
+        velocity.windows_hours:
+        - 1
+        - 24
+        - 168
+    outs:
+    - path: data/features/encoder.json
+      hash: md5
+      md5: cd395e3803b830e8e471b402a5a1eb4a
+      size: 3500873
+    - path: data/features/matrix
+      hash: md5
+      md5: 908c31ea2fb0940b185b447b1f1bd970.dir
+      size: 803821823
+      nfiles: 30
+  train_xgb:
+    cmd: .venv/bin/python -m fraud.models.xgb
+    deps:
+    - path: data/features/matrix
+      hash: md5
+      md5: 908c31ea2fb0940b185b447b1f1bd970.dir
+      size: 803821823
+      nfiles: 30
+    - path: src/fraud/config.py
+      hash: md5
+      md5: 15b58a3afbc5288c8e2113506e439a84
+      size: 1196
+      isexec: true
+    - path: src/fraud/data/split.py
+      hash: md5
+      md5: f796c5b8bd1914b9ccd2848259845e52
+      size: 6355
+      isexec: true
+    - path: src/fraud/models/xgb.py
+      hash: md5
+      md5: 02370ec0c12edd13e6fd44abea330bd4
+      size: 8318
+    params:
+      params.yaml:
+        paths.feature_matrix: data/features/matrix
+        paths.models: data/models
+        split:
+          train_end_year: 2017
+          val_year: 2018
+        xgboost:
+          n_estimators: 500
+          max_depth: 8
+          learning_rate: 0.05
+          subsample: 0.8
+          colsample_bytree: 0.8
+          scale_pos_weight: 10
+          scale_pos_weight_grid:
+          - 1
+          - 10
+          - 50
+          - 200
+          - 819
+          sweep_sample_fraction: 0.15
+          sweep_n_estimators: 150
+          eval_metric: aucpr
+          early_stopping_rounds: 50
+          random_state: 42
+    outs:
+    - path: data/models/xgb
+      hash: md5
+      md5: e995dccc72804fd62ba6838430817df8.dir
+      size: 7080043
+      nfiles: 2
+  evaluate:
+    cmd: .venv/bin/python -m fraud.models.evaluate
+    deps:
+    - path: data/features/matrix
+      hash: md5
+      md5: 908c31ea2fb0940b185b447b1f1bd970.dir
+      size: 803821823
+      nfiles: 30
+    - path: data/models/xgb
+      hash: md5
+      md5: e995dccc72804fd62ba6838430817df8.dir
+      size: 7080043
+      nfiles: 2
+    - path: src/fraud/config.py
+      hash: md5
+      md5: 15b58a3afbc5288c8e2113506e439a84
+      size: 1196
+      isexec: true
+    - path: src/fraud/models/evaluate.py
+      hash: md5
+      md5: ca1448f43a5531526337e4e6e531365d
+      size: 5058
+    - path: src/fraud/models/metrics.py
+      hash: md5
+      md5: 8c61219f8569b24773965b34d8cde696
+      size: 4916
+    params:
+      params.yaml:
+        evaluate:
+          target_false_positive_rate: 0.01
+          precision_at_k:
+          - 100
+          - 1000
+        paths.feature_matrix: data/features/matrix
+        paths.metrics_report: reports/metrics_xgb.json
+        paths.models: data/models
+        split:
+          train_end_year: 2017
+          val_year: 2018
+    outs:
+    - path: reports/metrics_xgb.json
+      hash: md5
+      md5: 2ed44b76f6fe18f5eb2c1c372ac4fd4c
+      size: 2461
+  register:
+    cmd: .venv/bin/python -m fraud.models.registry
+    deps:
+    - path: data/features/encoder.json
+      hash: md5
+      md5: cd395e3803b830e8e471b402a5a1eb4a
+      size: 3500873
+    - path: data/models/xgb
+      hash: md5
+      md5: e995dccc72804fd62ba6838430817df8.dir
+      size: 7080043
+      nfiles: 2
+    - path: reports/metrics_xgb.json
+      hash: md5
+      md5: 2ed44b76f6fe18f5eb2c1c372ac4fd4c
+      size: 2461
+    - path: src/fraud/config.py
+      hash: md5
+      md5: 15b58a3afbc5288c8e2113506e439a84
+      size: 1196
+      isexec: true
+    - path: src/fraud/models/registry.py
+      hash: md5
+      md5: 739a543769369c23d3b63e2ce9189c57
+      size: 5966
+    params:
+      params.yaml:
+        mlflow:
+          experiment_name: fraud-detection
+          registered_model_name: fraud-champion
+        paths.encoder: data/features/encoder.json
+        paths.metrics_report: reports/metrics_xgb.json
+        paths.models: data/models
+        paths.registry_report: reports/registry.json
+    outs:
+    - path: reports/registry.json
+      hash: md5
+      md5: aa280ac765477674744861214bdf7e60
+      size: 250

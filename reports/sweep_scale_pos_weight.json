@@ -1,0 +1,44 @@
+{
+  "grid": [
+    {
+      "scale_pos_weight": 1,
+      "val_auc_pr": 0.31748309601912417,
+      "best_iteration": 147,
+      "seconds": 83.6
+    },
+    {
+      "scale_pos_weight": 10,
+      "val_auc_pr": 0.321549771528716,
+      "best_iteration": 147,
+      "seconds": 119.1
+    },
+    {
+      "scale_pos_weight": 50,
+      "val_auc_pr": 0.27138932044317143,
+      "best_iteration": 149,
+      "seconds": 87.1
+    },
+    {
+      "scale_pos_weight": 200,
+      "val_auc_pr": 0.17888399392054358,
+      "best_iteration": 148,
+      "seconds": 85.6
+    },
+    {
+      "scale_pos_weight": 819,
+      "val_auc_pr": 0.1169099561365409,
+      "best_iteration": 148,
+      "seconds": 88.0
+    }
+  ],
+  "best": {
+    "scale_pos_weight": 10,
+    "val_auc_pr": 0.321549771528716,
+    "best_iteration": 147,
+    "seconds": 119.1
+  },
+  "selected_on": "val AUC-PR",
+  "train_rows_sampled": 3090735,
+  "sample_fraction": 0.15,
+  "note": "Uniform subsample, so training prevalence matches full data and the winning scale_pos_weight transfers directly. Validation is scored in full."
+}

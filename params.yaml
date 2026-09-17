@@ -14,6 +14,11 @@ paths:
   splits_manifest: reports/splits.json
   validation_report: reports/validation_report.json
   sample: data/sample/transactions.parquet
+  velocity: data/features/velocity
+  feature_matrix: data/features/matrix
+  encoder: data/features/encoder.json
+  metrics_report: reports/metrics_xgb.json
+  registry_report: reports/registry.json
 
 ingest:
   # Row-group size for Parquet output; tuned for streaming reads during training.
@@ -52,11 +57,26 @@ features:
   one_hot_max_cardinality: 8
   unknown_string_marker: "XX"
   unknown_zip_code: 0
+  # Columns encoded as categories. Measured cardinalities: Merchant 100,343 /
+  # Zip 27,322 / City 13,429 / State 223 / MCC 109 / Errors 23 / Chip 3.
+  categorical: [Merchant, Zip, City, State, MCC, Errors, Chip]
+  # Scaled numerics. Velocity columns are appended automatically.
+  #
+  # Year is deliberately NOT a feature. The split is temporal, so no training
+  # row carries 2019 or 2020; a tree cannot extrapolate past its training range
+  # and every test row would fall into one terminal bucket. Month and Day are
+  # fine -- they recur every year.
+  numeric: [Amount, Time, Month, Day]
 
 velocity:
   # Live aggregate windows (hours). Shared by the offline feature build and the
   # online API to prevent train/serve skew.
   windows_hours: [1, 24, 168]
+  # Velocity windows cross year partitions -- a 7-day window on 2018-01-02 needs
+  # December 2017 -- so this cannot be computed per-partition. It is computed in
+  # user chunks instead, because a window never spans two users. Smaller chunks
+  # trade more passes over the Parquet for lower peak memory.
+  users_per_chunk: 250
 
 xgboost:
   n_estimators: 500
@@ -64,8 +84,24 @@ xgboost:
   learning_rate: 0.05
   subsample: 0.8
   colsample_bytree: 0.8
-  # Class imbalance is ~1:1000; tuned on val, not guessed.
-  scale_pos_weight: 50
+  # Class imbalance is measured 1:819 (0.122%). Tuned on val, NOT guessed:
+  # chosen by src/fraud/models/sweep.py, see reports/sweep_scale_pos_weight.json.
+  #   spw    1 -> val AUC-PR 0.3175
+  #   spw   10 -> val AUC-PR 0.3215  <- selected
+  #   spw   50 -> val AUC-PR 0.2714  (the previous guess)
+  #   spw  200 -> val AUC-PR 0.1789
+  #   spw  819 -> val AUC-PR 0.1169  (full inverse prevalence -- worst on the grid)
+  # Note how badly the "balanced" value does: reweighting all the way to 1:1 is
+  # the standard trap with this much imbalance.
+  scale_pos_weight: 10
+  # Candidates for the sweep. 1 = no reweighting, 819 = full inverse prevalence.
+  # The right answer is rarely either extreme, which is why it is swept.
+  scale_pos_weight_grid: [1, 10, 50, 200, 819]
+  # The sweep trains once per grid point, so it runs on a stratified subsample
+  # of train with a shorter budget. Picking a hyperparameter does not need the
+  # full 20.6M rows; the final model is then refit on all of them.
+  sweep_sample_fraction: 0.15
+  sweep_n_estimators: 150
   eval_metric: aucpr
   early_stopping_rounds: 50
   random_state: 42
