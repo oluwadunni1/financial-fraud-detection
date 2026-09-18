@@ -1,0 +1,79 @@
+{
+  "n_card_values": 9,
+  "train_cards_encoded": 4782,
+  "splits": {
+    "train": {
+      "years": [
+        1991,
+        1992,
+        1993,
+        1994,
+        1995,
+        1996,
+        1997,
+        1998,
+        1999,
+        2000,
+        2001,
+        2002,
+        2003,
+        2004,
+        2005,
+        2006,
+        2007,
+        2008,
+        2009,
+        2010,
+        2011,
+        2012,
+        2013,
+        2014,
+        2015,
+        2016,
+        2017
+      ],
+      "transaction_nodes": 276969,
+      "user_nodes": 4772,
+      "merchant_nodes": 40837,
+      "edges": 553938,
+      "frauds": 25179,
+      "fraud_rate": 0.09090909090909091,
+      "under_sampled": true,
+      "txn_features": 62,
+      "user_features": 13,
+      "merchant_features": 24
+    },
+    "val": {
+      "years": [
+        2018
+      ],
+      "transaction_nodes": 1721615,
+      "user_nodes": 4006,
+      "merchant_nodes": 34793,
+      "edges": 3443230,
+      "frauds": 2491,
+      "fraud_rate": 0.0014468972447382255,
+      "under_sampled": false,
+      "txn_features": 62,
+      "user_features": 13,
+      "merchant_features": 24
+    },
+    "test": {
+      "years": [
+        2019,
+        2020
+      ],
+      "transaction_nodes": 2060438,
+      "user_nodes": 5141,
+      "merchant_nodes": 38927,
+      "edges": 4120876,
+      "frauds": 2087,
+      "fraud_rate": 0.0010128914337631126,
+      "under_sampled": false,
+      "txn_features": 62,
+      "user_features": 13,
+      "merchant_features": 24
+    }
+  },
+  "seconds": 21.2
+}

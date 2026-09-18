@@ -42,6 +42,27 @@ def binary_width(n_categories: int) -> int:
     return max(1, math.ceil(math.log2(n_categories + 1)))
 
 
+def binary_code_exprs(
+    column: str, mapping: dict[str, int], prefix: str | None = None
+) -> list[pl.Expr]:
+    """Binary-code a categorical column into one uint8 expression per bit.
+
+    Shared by `Encoder.transform` and the graph builder, which needs the same
+    codes for node identity features without carrying the rest of the encoder's
+    columns. Unseen categories fall to UNKNOWN_ORDINAL -> an all-zero code.
+    """
+    prefix = prefix or column
+    ordinal = (
+        pl.col(column)
+        .cast(pl.String)
+        .replace_strict(mapping, default=UNKNOWN_ORDINAL, return_dtype=pl.UInt32)
+    )
+    return [
+        ((ordinal // (2**bit)) % 2).cast(pl.UInt8).alias(f"{prefix}_bin_{bit}")
+        for bit in range(binary_width(len(mapping)))
+    ]
+
+
 @dataclass
 class Encoder:
     """A fitted encoder. Serialise with `to_json`, reload with `from_json`."""
@@ -125,21 +146,8 @@ class Encoder:
                 )
 
         for column, mapping in self.binary.items():
-            width = binary_width(len(mapping))
             # Unseen categories fall to UNKNOWN_ORDINAL rather than raising.
-            ordinal = (
-                pl.col(column)
-                .cast(pl.String)
-                .replace_strict(
-                    mapping, default=UNKNOWN_ORDINAL, return_dtype=pl.UInt32
-                )
-            )
-            for bit in range(width):
-                exprs.append(
-                    ((ordinal // (2**bit)) % 2).cast(pl.UInt8).alias(
-                        f"{column}_bin_{bit}"
-                    )
-                )
+            exprs += binary_code_exprs(column, mapping)
 
         for column, stats in self.numeric.items():
             exprs.append(

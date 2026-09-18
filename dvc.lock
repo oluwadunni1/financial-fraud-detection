@@ -190,10 +190,12 @@ stages:
       hash: md5
       md5: aca019c300d587f000c714afc0317aba
       size: 5411
+      isexec: true
     - path: src/fraud/features/encoders.py
       hash: md5
-      md5: de469dbd17cccdc6fc4c6924fe09d9ba
-      size: 7511
+      md5: c01a0596521293784de2709b4680571b
+      size: 7832
+      isexec: true
     params:
       params.yaml:
         features:
@@ -229,6 +231,7 @@ stages:
       hash: md5
       md5: cd395e3803b830e8e471b402a5a1eb4a
       size: 3500873
+      isexec: true
     - path: data/features/matrix
       hash: md5
       md5: 908c31ea2fb0940b185b447b1f1bd970.dir
@@ -370,3 +373,63 @@ stages:
       hash: md5
       md5: aa280ac765477674744861214bdf7e60
       size: 250
+  build_graph:
+    cmd: .venv/bin/python -m fraud.features.graph
+    deps:
+    - path: data/features/encoder.json
+      hash: md5
+      md5: cd395e3803b830e8e471b402a5a1eb4a
+      size: 3500873
+      isexec: true
+    - path: data/features/matrix
+      hash: md5
+      md5: 908c31ea2fb0940b185b447b1f1bd970.dir
+      size: 803821823
+      nfiles: 30
+    - path: data/processed
+      hash: md5
+      md5: 3967e7aa9b864da7a3802222d282d56c.dir
+      size: 563670306
+      nfiles: 30
+    - path: src/fraud/config.py
+      hash: md5
+      md5: 15b58a3afbc5288c8e2113506e439a84
+      size: 1196
+      isexec: true
+    - path: src/fraud/data/split.py
+      hash: md5
+      md5: f796c5b8bd1914b9ccd2848259845e52
+      size: 6355
+      isexec: true
+    - path: src/fraud/features/encoders.py
+      hash: md5
+      md5: c01a0596521293784de2709b4680571b
+      size: 7832
+      isexec: true
+    - path: src/fraud/features/graph.py
+      hash: md5
+      md5: cc29d88e3aa0ff3f79d47dd2d134139b
+      size: 13143
+    params:
+      params.yaml:
+        gnn.fraud_ratio: 0.1
+        gnn.random_state: 42
+        gnn.under_sample: true
+        paths.encoder: data/features/encoder.json
+        paths.feature_matrix: data/features/matrix
+        paths.graph: data/graph
+        paths.graph_summary: reports/graph_summary.json
+        paths.processed: data/processed
+        split:
+          train_end_year: 2017
+          val_year: 2018
+    outs:
+    - path: data/graph
+      hash: md5
+      md5: 4bd4e7210cbf77d6e9d701fc100ef238.dir
+      size: 163029325
+      nfiles: 15
+    - path: reports/graph_summary.json
+      hash: md5
+      md5: 96a15e130230ca2d9bbd19550801c63c
+      size: 1531

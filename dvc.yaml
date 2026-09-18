@@ -165,3 +165,32 @@ stages:
     outs:
       - reports/registry.json:
           cache: false
+
+  build_graph:
+    desc: >
+      Tri-partite User->Transaction->Merchant graph, ported from the NVIDIA
+      blueprint. Training graph under-sampled to ~9.1% fraud as the blueprint
+      does; val/test kept at the real rate so metrics stay comparable.
+    cmd: .venv/bin/python -m fraud.features.graph
+    deps:
+      - data/features/encoder.json
+      - data/features/matrix
+      - data/processed
+      - src/fraud/config.py
+      - src/fraud/data/split.py
+      - src/fraud/features/encoders.py
+      - src/fraud/features/graph.py
+    params:
+      - paths.processed
+      - paths.feature_matrix
+      - paths.encoder
+      - paths.graph
+      - paths.graph_summary
+      - gnn.under_sample
+      - gnn.fraud_ratio
+      - gnn.random_state
+      - split
+    outs:
+      - data/graph
+      - reports/graph_summary.json:
+          cache: false

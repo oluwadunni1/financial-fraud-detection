@@ -18,6 +18,7 @@ paths:
   feature_matrix: data/features/matrix
   encoder: data/features/encoder.json
   metrics_report: reports/metrics_xgb.json
+  graph_summary: reports/graph_summary.json
   registry_report: reports/registry.json
 
 ingest:
@@ -107,6 +108,16 @@ xgboost:
   random_state: 42
 
 gnn:
+  # Under-sampling, straight from the blueprint (preprocess_TabFormer_np.py):
+  # keep EVERY fraud row, thin non-fraud until fraud is `fraud_ratio`. This is
+  # what makes the training graph tractable -- 24.4M transaction nodes become a
+  # few hundred thousand -- while still showing the GNN every fraud XGBoost saw.
+  #
+  # Applied to the TRAINING graph ONLY. NVIDIA under-samples before splitting,
+  # which leaves val and test at ~10% fraud instead of 0.122% and makes every
+  # metric incomparable to the champion. Train like NVIDIA, evaluate for real.
+  under_sample: true
+  fraud_ratio: 0.1
   hidden_channels: 128
   embedding_dim: 64
   num_layers: 2
