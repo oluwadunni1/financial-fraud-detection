@@ -1,225 +1,118 @@
-<h2><img align="center" src="https://github.com/user-attachments/assets/cbe0d62f-c856-4e0b-b3ee-6184b7c4d96f">NVIDIA AI Blueprint: Financial Fraud Detection
-</h2>
+# Fraud Detection MLOps Platform
 
-## Table of Contents
+An end-to-end MLOps platform for credit-card fraud detection on IBM's TabFormer
+dataset (24,386,900 transactions), built to answer one question:
 
-- [Overview](#overview)
-  - [Software Components](#software-components)
-    - [Software Requirements](#software-requirements)
-  - [Target Audience](#target-audience)
-  - [Prerequisites](#prerequisites)
-    - [Hardware Requirements](#hardware-requirements)
-- [Getting Started](#getting-started)
-  - [Installation System Requirements](#installation-system-requirements)
-  - [Obtain API key](#obtain-api-key)
-  - [Clone The Repository](#clone-the-repository)
-  - [Set up the environment file](#set-up-the-environment-file)
-    - [API Key Environment variable](#api-key-environment-variable)
-    - [Conda Environment](#conda-environment)
-    - [Authenticate Docker with NGC](#authenticate-docker-with-ngc)
-  - [Running the workflow](#running-the-workflow)
-- [License](#license)
-- [Terms of Use](#terms-of-use)
+> **Does relational or sequential structure matter more for card fraud?**
 
-<br>
+Three models compete through **one serving contract and one registry**, so the
+comparison is like-for-like rather than three separate experiments:
 
-__Notice__: This README is for users running the notebook locally and makes assumptions that the software can be installed on the hardware.
+| Model | Inductive bias | Embedding | Status |
+|---|---|---|---|
+| XGBoost | tabular only | — | **champion, registered** |
+| GraphSAGE | relational — who transacts with whom | 64-d, users *and* merchants | next |
+| Foundation model | sequential — the order of a user's transactions | 512-d, users only | planned |
 
+The models are reference implementations. **The platform is the contribution:**
+the reproducible pipeline, the serving architecture, the monitoring, and the
+champion/challenger machinery that makes swapping between them safe.
 
-<br>
+## Current results
 
+The XGBoost champion, evaluated on 2019 (1,723,938 transactions, 2,087 frauds —
+a 1-in-826 base rate):
 
-# Overview
-Financial losses from worldwide credit card transaction fraud are [projected](https://www.paymentsdive.com/news/payments-fraud-losses-prevention-nilson-outlook/737440/) to reach more than $403 billion over the next decade. Transaction fraud poses a major challenge for financial institutions, which struggle to detect and prevent increasingly complicated fraudulent activities. Traditional fraud detection methods, which rely on rules-based systems or statistical methods, are reactive and increasingly ineffective in identifying sophisticated fraudulent activities. As data volumes grow and fraud tactics evolve, financial institutions need more proactive, intelligent approaches to detect and prevent fraudulent transactions.
+| Metric | Value | Meaning |
+|---|---|---|
+| **AUC-PR** | **0.3190** | **263x better than random** |
+| Recall @ 1% FPR | 95.4% | catches 1,990 of 2,087 frauds |
+| Precision @ 100 | 0.450 | 45 of the top 100 alerts are real fraud |
+| AUC-ROC | 0.9973 | reported for comparability — see below |
 
-This NVIDIA AI Blueprint provides a reference example to detect and prevent sophisticated fraudulent activities for financial services with high accuracy and reduced false positives. It shows developers how to build a financial fraud detection workflow using the NVIDIA container for fraud detection. For model building, the Financial Fraud Training container augments fraud detection using graph neural networks (GNNs)—a deep learning technique—for improved accuracy. Inference is done using [NVIDIA Dynamo-Triton (formerly Triton Inference Server)](https://developer.nvidia.com/dynamo) and produces fraud scores along with [Shapley values](https://en.wikipedia.org/wiki/Shapley_value) for explainability. Furthermore, to help simplify the workflow, the Financial Fraud Training container also produces all the needed configuration files required by Dynamo-Triton. 
+> **Accuracy and ROC-AUC are deliberately not headlined.** At a 1-in-826 base
+> rate, a model predicting "never fraud" scores 99.88% accuracy. The same
+> champion scores 0.997 ROC-AUC while raising 17,025 false alarms. AUC-PR's floor
+> is the base rate itself, which makes "better than chance" unambiguous.
 
-![Architectural Diagram](https://assets.ngc.nvidia.com/products/api-catalog/financial-fraud-detection/diagram.jpg)
+## Why this dataset
 
-This NVIDIA AI blueprint is broken down into three steps, which map to processes within a typical payment processing environment, those steps are: (1) Data Preparation, (2) Model Building, and (3) Data Inference. For this example, the data is a collection of files containing synthetic data. Within a production system, the event data is often saved within a database or a data lake. The data is prepared and then fed into the [financial-fraud-training container](https://catalog.ngc.nvidia.com/orgs/nvidia/teams/cugraph/containers/financial-fraud-training) model-building container. The output of the NIM folder with all the artifacts needs to be passed to Dynamo-Triton for inference.
+Fraud has three properties most portfolio datasets lack:
 
-This blueprint does not use any NVIDIA hosted services and runs fully in a locally hosted docker environment.
+- **Extreme imbalance** (0.122% positive) forces AUC-PR, precision@k and
+  cost-sensitive thresholds instead of accuracy.
+- **Delayed labels** — chargebacks arrive weeks later, so live accuracy cannot be
+  computed. This is what makes label-free performance estimation load-bearing.
+- **Real concept drift** — the fraud rate swings two orders of magnitude across
+  years in this data, so monitoring has something genuine to detect.
 
-<br>
+## Architecture
 
-## Software Components
-The following software components are used:
-- [financial-fraud-training container](https://catalog.ngc.nvidia.com/orgs/nvidia/teams/cugraph/containers/financial-fraud-training)
-- [NVIDIA Dynamo-Triton](https://developer.nvidia.com/dynamo)
-
-### Software Requirements
-- Operating System: Ubuntu 20.04 or newer
-- NVIDIA Driver version: 555.42.02 or newer
-- NVIDIA CUDA version: 12.5 or newer
-- NVIDIA Container Toolkit version: 1.15.0 or newer
-- Docker version: Docker version 26 or newer
-
-<br>
-
-## Target Audience
-
-This Blueprint targets users that:
-
-- understand the financial fraud space
-- understand how to deploy container-based microservices
-- understand how to run a Jupyter notebook
-
-This notebook is a simple example of how to orchestrate a financial fraud detection workflow that leverages the financial-fraud-training container. The notebook uses a synthetic dataset and produces the accuracy and a confusion matrix. Using real data in a production environment would not alter the workflow.
-
-<br>
-
-## Prerequisites
-
-- [Obtain NVIDIA key](#obtain-api-key)
-- [CUDA 12.5+ drivers](https://developer.nvidia.com/cuda-downloads) installed
-
-<br>
-
-### Hardware Requirements
-
-- GPU: 1x A6000, A100, or H100, minimum of 32 GB of memory 
-- CPU: x86_64 architecture
-- Storage: 10 GB
-- System Memory: 16 GB
-
-
-<br>
-
-# Getting Started
-
-## Installation System Requirements
-
-- [git](https://git-scm.com/)
-- [Jupyter Notebook or Jupyter Lab](https://jupyter.org/install)
-
-Additional required Python packages are installed in the [conda environment](#conda-environment) step.
-
-<br>
-
-## Obtain API key
-
-Here are two possible methods to generate an API key for NGC:
-
-- Sign in to the [NVIDIA Build](https://build.nvidia.com/explore/discover?signin=true) portal with your email.
-- Sign in to the [NVIDIA NGC](https://ngc.nvidia.com/) portal with your email.
-  - Select your organization from the dropdown menu after logging in. You must select an organization which has NVIDIA AI Enterprise (NVAIE) enabled.
-  - Click on your account in the top right, select "Setup" from the dropdown.
-  - Click the "Generate Personal Key" option and then the "+ Generate Personal Key" button to create your API key.
-    - This will be used in the NVIDIA_API_KEY environment variable.
-    - Click the "Generate API Key" option and then the "+ Generate API Key" button to create the API key.
-
-IMPORTANT: This will be used in the NVIDIA_API_KEY environment variable below.
-
-- API catalog keys:
-    NVIDIA [API catalog](https://build.nvidia.com/) or [NGC](https://org.ngc.nvidia.com/setup/personal-keys)
-
-<br>
-
-## Clone The Repository
-
-   ```bash
-   git clone https://github.com/NVIDIA-AI-Blueprints/Financial-Fraud-Detection
-   ```
-
-<br>
-
-## Set up the environment file
-
-### API Key Environment variable
-
-   ```bash
-   # Create the API environment
-   export NVIDIA_API_KEY=your_key
-   ```
-
-Note: Add the environment variable to the `.bashrc` file to persist it beyond a single instance.
-
-```bash
-# to persist the key
-echo "export NVIDIA_API_KEY=your_key" >> ~/.bashrc
+```
+OFFLINE (DVC pipeline)                    ONLINE
+raw CSV                                   FastAPI /predict
+  -> validate      (Pandera)                 <- embeddings   (Supabase/pgvector)
+  -> split         (temporal, asserted)      <- velocity     (live SQL)
+  -> velocity      (shared with serving)     <- champion     (MLflow registry)
+  -> features      (encoder fit on train)
+  -> train         (XGBoost / GraphSAGE)   MONITORING
+  -> evaluate                               NannyML drift + estimated performance
+  -> register      (MLflow alias)
 ```
 
-### Conda Environment
+Full design, measured storage budget and phase plan: **[`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)**.
 
-The workflow uses Conda to create an environment with all the needed packages. You can get a minimum installation of Conda and Mamba using [Miniforge](https://github.com/conda-forge/miniforge).
-
-Create an environment using the following command, making sure that you are in the `Financial-Fraud-Detection` folder.
+## Quickstart
 
 ```bash
- mamba env create -f conda/notebook_env.yaml
+uv venv --python 3.12
+uv pip install --python .venv/bin/python -e ".[dev]"
+
+cp .env.example .env          # DagsHub + Supabase credentials
+.venv/bin/dvc repro           # raw CSV -> registered champion
+.venv/bin/python -m pytest    # 117 tests
 ```
 
-Finally, activate the environment.
+The champion loads from the registry by alias, so swapping it needs no redeploy:
 
-```bash
-conda activate notebook_env
+```python
+mlflow.pyfunc.load_model("models:/fraud-champion@champion")
 ```
 
+## Engineering notes
 
+A few things measurement contradicted, all documented in `CLAUDE.md`:
 
-<br>
+- **Refunds are `$-292.00`, not `-$292.00`** — the minus sits inside the dollar
+  sign on 1,244,689 rows. The obvious regex rejects every refund in the dataset.
+- **Velocity features must be strictly causal.** `closed="left"` offline and
+  `ts < :now` online, so two transactions in the same minute are mutually
+  invisible. 142,010 rows share a user and a minute, so this is not academic.
+- **`scale_pos_weight` was swept, not guessed.** The value 10 beat the initial
+  guess of 50 by 29% AUC-PR; full inverse prevalence (819) was the *worst* value
+  on the grid. "Balance the classes" is a trap at this imbalance.
+- **`Year` is not a feature.** The split is temporal, so no training row carries
+  a test year, and a tree cannot extrapolate.
 
-### Authenticate Docker with NGC
+## Honest limitations
 
-In order to pull images required by the Blueprint from NGC, you must first authenticate Docker with NGC. You can use the same NVIDIA API Key obtained in the [Obtain API key](#obtain-api-key) section (saved in the `NVIDIA_API_KEY` environment variable).
+1. TabFormer has only ~2,000 users, so embedding refresh is nearly free here —
+   the pattern is demonstrated, not the scale.
+2. The data is synthetic; drift is simulated rather than organic.
+3. Labels are artificially delayed, not genuinely delayed.
+4. Single-node throughput — no streaming ingest, no horizontal scaling story.
+5. NVIDIA's published numbers are not reproduced: different framework, CPU
+   serving, different feature pipeline.
 
-```bash
-echo "${NVIDIA_API_KEY}" | docker login nvcr.io -u '$oauthtoken' --password-stdin
-```
+## Credits
 
-<br>
+Derived from the [NVIDIA AI Blueprint: Financial Fraud Detection](https://github.com/NVIDIA-AI-Blueprints/financial-fraud-detection),
+licensed under Apache 2.0. The original blueprint README is preserved at
+[`docs/NVIDIA_BLUEPRINT_README.md`](docs/NVIDIA_BLUEPRINT_README.md); the graph
+construction logic and the fraud framing come from there. The NGC-gated training
+container and Triton serving path are deliberately not used — see
+`docs/ARCHITECTURE.md` §1.
 
-## Running the workflow
+Dataset: [IBM TabFormer](https://github.com/IBM/TabFormer), Apache 2.0.
 
-No command line option (CLI) is available without converting a Jupyter Notebook to a Python file.
-
-Prerequisite: Start a browser
-
-Starting Jupyter
-
-__Option 1:__
-
-```bash
-   jupyter notebook
-```
-
-__Option 2:__
-
- Starting Jupyter Notebook with [notebooks/financial-fraud-usage-v2.ipynb](notebooks/financial-fraud-usage-v2.ipynb).
-
-```bash
-   cd notebooks
-   jupyter notebook financial-fraud-usage-v2.ipynb
-```
-NOTE: If you are interested in node prediction, use [notebooks/financial-fraud-usage-np.ipynb](notebooks/financial-fraud-usage-np.ipynb) instead.
-
-__Option 3:__
-
-Starting Jupyter Labs
-
-```bash
-jupyter-lab
-
-or 
-
-jupyter-lab --ip=* --no-browser
-```
-
-In either case above, Jupyter will output status information. One key line is the URL:
-
-```bash
-$ jupyter notebook
-   ...
-   The Jupyter Notebook is running at: http://localhost:8888/
-```
-
-Via the browser, connect to the specified URL and process the notebook.
-
-<br>
-
-# License
-
-By using this software or microservice, you are agreeing to the [terms and conditions](https://www.nvidia.com/en-us/data-center/products/nvidia-ai-enterprise/eula/) of the [license](./LICENSE) and acceptable use policy.
-
-# Terms of Use
-GOVERNING TERMS: The NIM container is governed by the [NVIDIA Software License Agreement](https://www.nvidia.com/en-us/agreements/enterprise-software/nvidia-software-license-agreement/) and [Product-Specific Terms for AI Products](https://www.nvidia.com/en-us/agreements/enterprise-software/product-specific-terms-for-ai-products/).
+This project remains Apache 2.0 — see [`LICENSE`](LICENSE).
