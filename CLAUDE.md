@@ -16,8 +16,23 @@ Three models compete through one serving contract and one registry:
 The comparison is the point: does relational or sequential structure matter more for
 card fraud? Champion/challenger swapping is what gives the registry a real job.
 
-- `main` tracks NVIDIA upstream. **Do not commit work there.**
-- `mlops-platform` is the working branch.
+### Two remotes, on purpose
+
+| Remote | Repo | Role |
+|---|---|---|
+| `standalone` | `oluwadunni1/fraud-detection-mlops` | **The real home.** Not a fork, so commits count toward the contribution graph. Work lands on its `main`. |
+| `origin` | `oluwadunni1/financial-fraud-detection` | The fork. Keeps `main` as a clean NVIDIA upstream mirror; work mirrors to `mlops-platform`. |
+
+Push both: `git push standalone mlops-platform:main && git push origin mlops-platform`.
+
+GitHub excludes **all** commits in forked repositories from the contribution
+graph, regardless of branch -- which is why the standalone repo exists. Counting
+needs all three of: not a fork, on the default branch, author email verified on
+the account. All three are satisfied; verified via the API that commits are
+attributed to `oluwadunni1`.
+
+- In the fork, `main` tracks NVIDIA upstream. **Do not commit work there.**
+- `mlops-platform` is the working branch locally.
 
 ## Read this first
 
