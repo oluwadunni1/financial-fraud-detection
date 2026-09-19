@@ -42,9 +42,10 @@ phases; section 10 is the Lightning AI setup.
 
 ## Current state (update as phases complete)
 
-**Phase 2 complete (2026-09-17).** `dvc repro` runs raw CSV -> champion in the registry.
-`fraud-champion` v1 is live under the `champion` alias, headline AUC-PR **0.3190** (263x
-base rate). Next up is Phase 3 (GraphSAGE on the GPU Studio).
+**Phase 3 modelling complete (2026-09-19).** GraphSAGE beats the XGBoost champion
+**0.6474 vs 0.3190** test-2019 AUC-PR -- relational structure matters, and by 2x. But
+flattening it to embeddings-as-features destroys the gain (0.1351), so the section 3.1
+serving design cannot deliver it. Promotion deferred; see ARCHITECTURE section 6 Phase 3.
 
 | | Status |
 |---|---|
@@ -113,6 +114,15 @@ These were settled deliberately. Reopen only if new evidence appears.
    10 beats the guessed 50 by 29% headline AUC-PR and cuts missed frauds 63%. Full inverse
    prevalence (819) is the *worst* value on the grid -- "balance the classes" is a trap
    here. Re-sweep for the GNN and the foundation model.
+16. **Do not port a preprocessing step just because the blueprint has one.** Their
+   non-fraud dedupe cost **19x** on test once we evaluated on the real distribution -- it
+   strips the repeated legitimate behaviour that is most of real traffic. Harmless for them
+   because they evaluate on the deduped distribution too. Check every inherited step
+   against *our* evaluation, not theirs.
+17. **The GNN's value does not survive flattening into embeddings.** End to end it scores
+   0.6474 on test 2019; its embeddings bolted onto XGBoost score 0.1351, *worse than no
+   embeddings at all* (0.2113). Section 3.1's precomputed-embedding serving design cannot
+   deliver the 2x, so Phase 4 must resolve how to serve the GNN before it can be promoted.
 
 ## Conventions
 
@@ -151,8 +161,17 @@ These were settled deliberately. Reopen only if new evidence appears.
   `Year >= 2019` test set draws every positive from 2019 alone.
 - **Reading the 2.35 GB CSV with pandas' default inference yields mixed dtypes.** Pass
   explicit `dtype=`; a silent `object` column will break validation in confusing ways.
-- **Do not load the full graph onto the GPU.** Use PyG `NeighborLoader`; features stay in
-  CPU RAM and are gathered per batch.
+- **`to_hetero` FX-traces the model, so `F.dropout(training=...)` bakes the flag in as a
+  constant** -- dropout stays ON during eval and silently corrupts every validation score.
+  Use `nn.Dropout`. Likewise `torch.manual_seed` does not reach `NeighborLoader`'s workers:
+  pass an explicit generator or the same config scores differently run to run.
+- **The blueprint's graph edges are one-directional.** `user->txn` and `txn->merchant` mean
+  a transaction can aggregate from its user but never its merchant -- half the graph
+  silently unreachable. Apply `ToUndirected`.
+- **"Do not load the full graph onto the GPU"** was sized for a 24.4M-node graph and 9.6 GB
+  of features. After under-sampling the training graph is 277k nodes and peak VRAM is
+  **154 MB**, so the constraint no longer binds -- but keep `NeighborLoader` for the 2M-node
+  val/test graphs.
 - **Velocity is `closed="left"` offline and `ts < :now` online.** Both mean *strictly
   earlier*, so two transactions in the same minute are mutually invisible. 142,010 rows
   share a user and a minute, so this is not a corner case. A `<=` in the online SQL would

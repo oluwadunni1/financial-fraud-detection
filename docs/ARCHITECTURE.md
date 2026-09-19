@@ -583,13 +583,77 @@ dominates both the wall clock and the memory.
 > Deliberately before the GNN: it gives a servable model early, so Phases 4–6 can proceed
 > without waiting on GPU work, and it's the honest comparison baseline.
 
-### Phase 3 — Graph & GNN (Lightning AI)
-- [ ] Port graph construction → `edges/node_features/labels` Parquet
-- [ ] GraphSAGE in PyG with `NeighborLoader`
-- [ ] Lightning Studio: `dvc pull` → train → log to remote MLflow → push artifacts
-- [ ] Compare vs XGBoost; promote champion on merit, not on novelty
-- [ ] `precompute_embeddings.py` → upsert user/merchant embeddings to Supabase
-- **Done when:** embeddings are in Postgres with `computed_at` + `model_version`.
+### Phase 3 — Graph & GNN — **COMPLETE (2026-09-19)**
+- [x] Tri-partite graph ported from `preprocess_TabFormer_np.py`
+- [x] Heterogeneous GraphSAGE in PyG with `NeighborLoader`
+- [x] Trained on a T4: 20 epochs, 182s, **peak VRAM 154 MB**
+- [x] Compared against the champion on merit
+- [ ] Embeddings upserted to Supabase *(blocked -- see the serving problem below)*
+
+#### Result: relational structure wins, decisively
+
+| Model | test 2019 AUC-PR | P@100 | Recall @ 1% FPR |
+|---|---|---|---|
+| XGBoost champion (20.6M rows, 86 feat) | 0.3190 | 0.450 | 95.4% |
+| **GraphSAGE, end to end** | **0.6474** | **0.660** | **97.9%** |
+
+**2.03x the champion**, and far more stable: val 0.6775 -> test 0.6474 is a 1.05x
+drop where the champion loses 1.6x.
+
+The advantage is **precision, not recall**. Both models catch ~96-98% of fraud at the
+1% FPR operating point; the GNN simply ranks real fraud above noise far better.
+
+> **It is not exploiting fraud bursts.** 2019's 2,087 frauds sit on just 244 cards, and
+> 99.6% of them share a card with another fraud -- so a graph model could plausibly cheat
+> by aggregating over siblings. It does not: on the **first** fraud of each card, where no
+> earlier sibling exists, recall is 95.9% against the champion's 95.5%. Parity. The edge
+> comes from ranking, not from seeing neighbours.
+
+#### The finding that breaks the planned serving path
+
+Flattening the GNN into embeddings-as-features **destroys its advantage**:
+
+| Head (identical XGBoost, identical 277k rows) | test 2019 AUC-PR |
+|---|---|
+| base features only | 0.2113 |
+| base + 64-d user & merchant embeddings | **0.1351** |
+| *GraphSAGE end to end, same graph* | *0.6474* |
+
+The embeddings do not merely fail to help -- they make it **worse** than no embeddings at
+all. Section 3.1 specifies precomputed embeddings plus a downstream head, and that design
+would throw away every bit of the 2x. **Phase 4 cannot serve this model the planned way.**
+
+Options, in order of preference: serve the GNN end to end over a subgraph fetched per
+request (abandons the frozen-embedding design and its latency budget); or keep frozen
+embeddings and accept a materially weaker model; or revisit whether a richer embedding
+(more dimensions, or transaction-level rather than node-level) survives the flattening.
+This is the central open question for Phase 4.
+
+> **Promotion is therefore deferred.** The GNN beats the champion by 2x on merit and would
+> normally take the `champion` alias, but the alias drives an API that cannot serve it yet.
+> Registering it as `challenger` with its real metrics is the honest state.
+
+#### The ported line that was costing 19x
+
+The blueprint dedupes non-fraud rows on the nominal predictors before under-sampling. It
+was ported faithfully, and it was crippling everything. Same XGBoost, same 86 features,
+two 277k training sets differing only in that flag:
+
+| | val | test 2019 |
+|---|---|---|
+| deduped + under-sampled | 0.0894 | 0.0089 |
+| under-sampled only | 0.3541 | **0.1715** |
+| champion (20.6M rows) | 0.5181 | 0.3190 |
+
+**The dedupe costs 19x; the smaller sample costs a further 1.9x.** Dropping repeated
+non-fraud removes same-card-same-merchant behaviour, which is most of real traffic, so the
+model never learns what normal looks like. It is harmless in the blueprint because they
+evaluate on the same deduped distribution -- and ruinous here only because we deliberately
+evaluate on the real one. The two choices interacted; only ours was defensible.
+
+Before the fix the GNN scored val 0.1435 and the conclusion being written was *"relational
+structure doesn't help on this dataset"*. After it: 0.6795. `gnn.dedupe_non_fraud` is now a
+parameter, defaulting false, with the measurement recorded beside it.
 
 ### Phase 3.5 — Foundation model challenger (Lightning AI)
 
