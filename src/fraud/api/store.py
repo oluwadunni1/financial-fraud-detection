@@ -35,6 +35,22 @@ RAW_COLUMNS = (
     "time_min", "month", "day",
 )
 
+# The database spells these differently from the feature pipeline. Mapping them
+# once, here, keeps the schema's naming from leaking into the model code.
+_DB_TO_CANONICAL = {
+    "user_id": "User",
+    "amount": "Amount",
+    "merchant": "Merchant",
+    "state": "State",
+    "city": "City",
+    "zip": "Zip",
+    "errors": "Errors",
+    "chip": "Chip",
+    "time_min": "Time",
+    "month": "Month",
+    "day": "Day",
+}
+
 
 @dataclass
 class Neighbourhood:
@@ -79,19 +95,13 @@ def _to_frame(rows: list[dict[str, Any]]) -> pl.DataFrame:
                 "State": pl.String,
                 "merchant_id": pl.Int64,
                 **{c: pl.Float64 for c in velocity_columns([1, 24, 168])},
-                **{c: pl.String for c in ("city", "errors", "chip")},
-                **{c: pl.Int64 for c in ("zip", "time_min", "month", "day")},
+                **{c: pl.String for c in ("City", "Errors", "Chip")},
+                **{c: pl.Int64 for c in ("Zip", "Time", "Month", "Day")},
             }
         )
-    frame = pl.DataFrame(rows)
-    return frame.rename(
-        {
-            "user_id": "User",
-            "amount": "Amount",
-            "merchant": "Merchant",
-            "state": "State",
-        }
-    )
+    # Canonical names here, not in the caller: subgraph.py and the predictor
+    # should not need to know what the database columns are called.
+    return pl.DataFrame(rows).rename(_DB_TO_CANONICAL)
 
 
 _HISTORY_SQL = """

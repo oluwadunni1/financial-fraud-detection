@@ -29,6 +29,7 @@ import pathlib
 from dataclasses import dataclass, field
 from typing import Any
 
+import numpy as np
 import polars as pl
 
 # Ordinal 0 is reserved: it means "not seen during fit". In binary that is an
@@ -157,6 +158,42 @@ class Encoder:
             )
 
         return df.select(exprs)
+
+    # -- serving fast path -------------------------------------------------
+    def transform_rows(self, rows: list[dict[str, Any]]) -> np.ndarray:
+        """Encode a handful of rows without building a polars query.
+
+        Identical output to `transform`, and `tests/test_subgraph.py` asserts
+        that -- but ~100x faster for the one-to-twenty rows a single request
+        carries.
+
+        `transform` is the right tool for 24M rows: it builds 86 expressions,
+        one of them a `replace_strict` holding 93,298 merchant codes, and lets
+        polars execute them vectorised. Paying that construction cost to encode
+        a single transaction took **110 ms**, which was over half the serving
+        latency budget on its own. Here the same mappings are just dict lookups.
+        """
+        out = np.zeros((len(rows), len(self.feature_names())), dtype=np.float32)
+        for row_index, row in enumerate(rows):
+            column = 0
+            for name, categories in self.one_hot.items():
+                value = str(row[name])
+                for category in categories:
+                    out[row_index, column] = 1.0 if value == category else 0.0
+                    column += 1
+            for name, mapping in self.binary.items():
+                # Unseen -> UNKNOWN_ORDINAL -> an all-zero code, exactly as the
+                # batch path does. This is the cold-start case, not an error.
+                ordinal = mapping.get(str(row[name]), UNKNOWN_ORDINAL)
+                for bit in range(binary_width(len(mapping))):
+                    out[row_index, column] = float((ordinal >> bit) & 1)
+                    column += 1
+            for name, stats in self.numeric.items():
+                out[row_index, column] = (
+                    float(row[name]) - stats["median"]
+                ) / stats["scale"]
+                column += 1
+        return out
 
     # -- introspection ----------------------------------------------------
     def feature_names(self) -> list[str]:

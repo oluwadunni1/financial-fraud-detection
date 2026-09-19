@@ -147,6 +147,19 @@ gnn:
   dropout: 0.3
   random_state: 42
 
+serving:
+  # Which registry alias the API loads (decision 14: alias, never a path).
+  # `challenger` until the causal replay confirms the GNN's offline number and
+  # it is promoted; then this becomes `champion`.
+  model_alias: challenger
+  # How many of a card's / merchant's recent rows form the request subgraph.
+  # The offline fanout is [25, 10]; this is the online equivalent of the second
+  # hop, and it bounds both the SQL and the forward pass.
+  neighbours: 10
+  # Rows older than the largest velocity window cannot affect any feature, so
+  # there is nothing to gain by fetching them.
+  history_hours: 168
+
 evaluate:
   # Operating point for the fraud decision threshold.
   target_false_positive_rate: 0.01

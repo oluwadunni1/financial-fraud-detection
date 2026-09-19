@@ -23,14 +23,13 @@ from __future__ import annotations
 from typing import Any
 
 import numpy as np
-import polars as pl
 import torch
 from torch_geometric.data import HeteroData
 from torch_geometric.transforms import ToUndirected
 
 from fraud.api.store import Neighbourhood
-from fraud.features.encoders import Encoder, binary_code_exprs
-from fraud.features.graph import NODE_ID_COLUMNS, combined_card_id
+from fraud.features.encoders import UNKNOWN_ORDINAL, Encoder, binary_width
+from fraud.features.graph import NODE_ID_COLUMNS
 from fraud.models.gnn import MERCHANT, TXN, USER
 
 # The transaction node's own features come from the encoder, minus the columns
@@ -47,35 +46,24 @@ def transaction_feature_names(encoder: Encoder) -> list[str]:
     ]
 
 
-def _encode_transactions(
-    frame: pl.DataFrame, encoder: Encoder, names: list[str]
-) -> torch.Tensor:
-    encoded = encoder.transform(frame)
-    return torch.from_numpy(
-        encoded.select(names).to_numpy().astype(np.float32)
+def transaction_feature_indices(encoder: Encoder) -> np.ndarray:
+    """Which columns of the encoder's output a transaction node keeps."""
+    return np.array(
+        [
+            i
+            for i, name in enumerate(encoder.feature_names())
+            if not name.startswith(_DROPPED_PREFIXES)
+        ],
+        dtype=np.int64,
     )
 
 
-def _card_features(card_ids: list[int], card_mapping: dict[str, int]) -> torch.Tensor:
-    frame = pl.DataFrame({"card_id": pl.Series(card_ids, dtype=pl.Int64)})
-    coded = frame.select(binary_code_exprs("card_id", card_mapping, prefix="card"))
-    return torch.from_numpy(coded.to_numpy().astype(np.float32))
-
-
-def _merchant_features(
-    merchants: list[str], mccs: list[int], encoder: Encoder
-) -> torch.Tensor:
-    frame = pl.DataFrame(
-        {
-            "Merchant": pl.Series(merchants, dtype=pl.String),
-            "MCC": pl.Series(mccs, dtype=pl.Int64),
-        }
-    )
-    coded = frame.select(
-        *binary_code_exprs("Merchant", encoder.binary["Merchant"]),
-        *binary_code_exprs("MCC", encoder.binary["MCC"]),
-    )
-    return torch.from_numpy(coded.to_numpy().astype(np.float32))
+def _binary_code(value: str, mapping: dict[str, int]) -> list[float]:
+    """One categorical value's binary code. Unseen -> all zeros (cold start)."""
+    ordinal = mapping.get(str(value), UNKNOWN_ORDINAL)
+    return [
+        float((ordinal >> bit) & 1) for bit in range(binary_width(len(mapping)))
+    ]
 
 
 def build_request_graph(
@@ -91,54 +79,47 @@ def build_request_graph(
     Node 0 of the transaction type is always the transaction being scored, so
     the caller reads its logit at index 0. Neighbours follow.
     """
-    names = transaction_feature_names(encoder)
+    # Serving encodes a handful of rows, so the row-wise path is used here --
+    # `transform` builds 86 polars expressions (one holding 93,298 merchant
+    # codes) and cost 110 ms per request. `transform_rows` is bit-identical and
+    # ~100x faster at this size; tests/test_subgraph.py binds them together.
+    keep = transaction_feature_indices(encoder)
 
-    # --- the arriving transaction, with the velocity just computed for it ---
-    arriving = pl.DataFrame({**{k: [v] for k, v in transaction.items()}})
-    arriving = arriving.with_columns(
-        **{name: pl.lit(value, dtype=pl.Float64) for name, value in velocity.items()}
-    )
-
-    # --- neighbours: their stored velocity is reused, not recomputed ---------
-    # Those values were derived from `ts < that row's ts` when the row was
-    # scored, so they cannot contain anything that row could not have seen.
-    neighbours = neighbourhood.user_history
-    merchant_neighbours = neighbourhood.merchant_history
-
-    txn_frames = [arriving.select(sorted(arriving.columns))]
-    for frame in (neighbours, merchant_neighbours):
-        if not frame.is_empty():
-            renamed = frame.rename(
-                {
-                    "city": "City",
-                    "zip": "Zip",
-                    "errors": "Errors",
-                    "chip": "Chip",
-                    "time_min": "Time",
-                    "month": "Month",
-                    "day": "Day",
-                }
+    required = (*encoder.one_hot, *encoder.binary, *encoder.numeric)
+    rows = [{**transaction, **velocity}]
+    for frame in (neighbourhood.user_history, neighbourhood.merchant_history):
+        if frame.is_empty():
+            continue
+        # A store that silently drops a column would otherwise surface as a
+        # KeyError deep in the encoder, or worse, as a plausible wrong number.
+        missing = [c for c in required if c not in frame.columns]
+        if missing:
+            raise ValueError(
+                f"neighbour rows are missing columns the encoder needs: "
+                f"{missing}. The store must return every encoder input."
             )
-            txn_frames.append(renamed.select(sorted(arriving.columns)))
+        rows.extend(frame.to_dicts())
 
-    all_txns = pl.concat(txn_frames, how="vertical_relaxed")
-    x_txn = _encode_transactions(all_txns, encoder, names)
+    encoded = encoder.transform_rows(rows)[:, keep]
+    x_txn = torch.from_numpy(np.ascontiguousarray(encoded))
 
     # --- id nodes -----------------------------------------------------------
-    card_id = int(
-        pl.DataFrame(
-            {"User": [transaction["User"]], "Card": [transaction["Card"]]}
-        )
-        .select(combined_card_id(n_card_values))
-        .item()
-    )
+    # The same formula combined_card_id() encodes, evaluated directly -- a
+    # one-row polars frame is not worth building for two integers.
+    card_id = int(transaction["User"]) * n_card_values + int(transaction["Card"])
     merchant = str(transaction["Merchant"])
 
     data = HeteroData()
     data[TXN].x = x_txn
-    data[USER].x = _card_features([card_id], card_mapping)
-    data[MERCHANT].x = _merchant_features(
-        [merchant], [int(transaction["MCC"])], encoder
+    data[USER].x = torch.tensor(
+        [_binary_code(str(card_id), card_mapping)], dtype=torch.float32
+    )
+    data[MERCHANT].x = torch.tensor(
+        [
+            _binary_code(merchant, encoder.binary["Merchant"])
+            + _binary_code(str(int(transaction["MCC"])), encoder.binary["MCC"])
+        ],
+        dtype=torch.float32,
     )
 
     # Every transaction node hangs off the one card and the one merchant. That

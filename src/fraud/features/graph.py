@@ -240,6 +240,18 @@ def build(
 
     if out_dir.exists():
         shutil.rmtree(out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    # Serving needs this: a card's identity code must mean the same thing at
+    # request time as it did in training, and the mapping is fitted on train
+    # only. Without it persisted, the API would have to rebuild the graph to
+    # score one transaction.
+    (out_dir / "card_mapping.json").write_text(
+        json.dumps(
+            {"n_card_values": int(n_card_values), "mapping": card_mapping}
+        )
+    )
+
     started = time.perf_counter()
     summary: dict = {
         "n_card_values": int(n_card_values),
