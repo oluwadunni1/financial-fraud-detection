@@ -607,11 +607,24 @@ dominates both the wall clock and the memory.
 
 | Model | test 2019 AUC-PR | P@100 | Recall @ 1% FPR |
 |---|---|---|---|
-| XGBoost champion (20.6M rows, 86 feat) | 0.3190 | 0.450 | 95.4% |
-| **GraphSAGE, end to end** | **0.6474** | **0.660** | **97.9%** |
+| XGBoost champion (20.6M rows, 86 feat) | 0.2501 | 0.410 | 91.6% |
+| **GraphSAGE, end to end** | **0.5614** | **0.770** | **96.2%** |
 
-**2.03x the champion**, and far more stable: val 0.6775 -> test 0.6474 is a 1.05x
-drop where the champion loses 1.6x.
+**2.24x the champion.**
+
+> **These numbers are lower than first reported (0.6474 / 0.3190), and the earlier
+> pair was not servable.** Phase 4's skew test found that `velocity_seconds_since_last`
+> was computed two different ways: the window aggregates used `closed="left"` (ties
+> excluded) while this feature used `ts.diff()` (ties included), so it reported *0.0
+> seconds since last* for same-minute transactions. That is a rapid-fire burst signal,
+> and the serving path structurally cannot see it -- `ts < :now` excludes ties. A model
+> leaning on it would have underperformed in production by an unknown amount.
+>
+> Both models were retrained on the corrected definition. XGBoost training was verified
+> deterministic (two runs, identical `best_iter` and val AUC-PR), so this is a real
+> effect rather than run-to-run noise. The drop is larger than the feature's rank-73 /
+> 0.28%-gain importance suggests, which points at GBDT sensitivity to a shifted input
+> distribution -- but the corrected figures are the ones a deployed model can reproduce.
 
 The advantage is **precision, not recall**. Both models catch ~96-98% of fraud at the
 1% FPR operating point; the GNN simply ranks real fraud above noise far better.

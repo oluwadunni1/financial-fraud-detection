@@ -118,13 +118,23 @@ def test_users_never_see_each_other():
 
 
 def test_seconds_since_last():
-    r = by_id(compute_velocity(BASIC, [1]))
+    # 24h window: the 22.5h gap to txn 4 has to be inside it to be reported at
+    # all -- the feature is bounded by the largest window so that serving, which
+    # fetches finite history, can compute the same thing.
+    r = by_id(compute_velocity(BASIC, [1, 24]))
     assert r[1][SECONDS_SINCE_LAST] == NO_PRIOR_TRANSACTION
     assert r[2][SECONDS_SINCE_LAST] == 15 * 60
     assert r[4][SECONDS_SINCE_LAST] == pytest.approx((22 * 60 + 30) * 60)
 
 
-def test_seconds_since_last_is_zero_for_ties():
+def test_seconds_since_last_skips_tied_rows():
+    """A tied row is not "the previous transaction" -- it is invisible.
+
+    `closed="left"` excludes same-timestamp rows from every window, so this
+    feature must exclude them too or one vector carries two different notions of
+    "previous". It used to report 0.0 here, which disagreed with what serving
+    computes from `ts < :now`. See tests/test_skew.py.
+    """
     tied = frame(
         [
             (1, 7, D(2020, 1, 1, 10, 0), 10.0, "m1", "CA"),
@@ -132,7 +142,21 @@ def test_seconds_since_last_is_zero_for_ties():
         ]
     )
     r = by_id(compute_velocity(tied, [1]))
-    assert r[2][SECONDS_SINCE_LAST] == 0.0
+    # Both rows tie, so neither has a strictly-earlier predecessor.
+    assert r[1][SECONDS_SINCE_LAST] == NO_PRIOR_TRANSACTION
+    assert r[2][SECONDS_SINCE_LAST] == NO_PRIOR_TRANSACTION
+
+
+def test_seconds_since_last_is_bounded_by_the_largest_window():
+    """Serving fetches finite history, so an unbounded lookback is unservable."""
+    far_apart = frame(
+        [
+            (1, 7, D(2020, 1, 1, 10, 0), 10.0, "m1", "CA"),
+            (2, 7, D(2020, 3, 1, 10, 0), 20.0, "m2", "CA"),  # ~60 days later
+        ]
+    )
+    r = by_id(compute_velocity(far_apart, [1, 24, 168]))
+    assert r[2][SECONDS_SINCE_LAST] == NO_PRIOR_TRANSACTION
 
 
 def test_input_order_does_not_matter():

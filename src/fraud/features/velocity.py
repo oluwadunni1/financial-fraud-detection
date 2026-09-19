@@ -102,18 +102,35 @@ def compute_velocity(
         # a positional hstack is safe (asserted in tests/test_velocity.py).
         out = out.hstack(agg.drop("User", "ts"))
 
-    # Time since the user's previous transaction. Ties give 0.0, which is
-    # correct: the previous transaction really was in the same minute.
-    gap = (
-        frame.select(
-            pl.col("ts")
-            .diff()
-            .over("User")
-            .dt.total_seconds()
-            .cast(pl.Float64)
-            .fill_null(NO_PRIOR_TRANSACTION)
-            .alias(SECONDS_SINCE_LAST)
-        )
+    # Seconds since the most recent STRICTLY EARLIER transaction, within the
+    # largest window.
+    #
+    # Not `ts.diff().over("User")`. That reads the previous row in sort order,
+    # which includes rows sharing this timestamp -- so a tied row reported 0.0
+    # while the window aggregates beside it, using closed="left", had already
+    # excluded that same row. Two different notions of "previous" in one feature
+    # vector. Serving queries `ts < :now` and would therefore have disagreed with
+    # training on all 142,010 same-user-same-minute rows, silently.
+    #
+    # Bounding it by the largest window matters just as much: the online caller
+    # fetches a finite slice of history, so an unbounded lookback is not
+    # computable at serving time. Beyond the window the answer is the
+    # no-prior-transaction sentinel, which is what serving would produce anyway.
+    #
+    # Caught by tests/test_skew.py on its first run.
+    previous = frame.rolling(
+        index_column="ts",
+        period=f"{max(windows_hours)}h",
+        group_by="User",
+        closed="left",
+    ).agg(pl.col("ts").max().alias("_previous_ts"))
+
+    gap = frame.select("ts").hstack(previous.select("_previous_ts")).select(
+        (pl.col("ts") - pl.col("_previous_ts"))
+        .dt.total_seconds()
+        .cast(pl.Float64)
+        .fill_null(NO_PRIOR_TRANSACTION)
+        .alias(SECONDS_SINCE_LAST)
     )
     out = out.hstack(gap)
 

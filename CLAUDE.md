@@ -43,7 +43,7 @@ phases; section 10 is the Lightning AI setup.
 ## Current state (update as phases complete)
 
 **Phase 3 modelling complete (2026-09-19).** GraphSAGE beats the XGBoost champion
-**0.6474 vs 0.3190** test-2019 AUC-PR -- relational structure matters, and by 2x. But
+**0.5614 vs 0.2501** test-2019 AUC-PR -- relational structure matters, and by 2.2x. But
 flattening it to embeddings-as-features destroys the gain (0.1351), so the section 3.1
 serving design cannot deliver it. Promotion deferred; see ARCHITECTURE section 6 Phase 3.
 
@@ -128,7 +128,7 @@ These were settled deliberately. Reopen only if new evidence appears.
    because they evaluate on the deduped distribution too. Check every inherited step
    against *our* evaluation, not theirs.
 17. **The GNN's value does not survive flattening into embeddings.** End to end it scores
-   0.6474 on test 2019; its embeddings bolted onto XGBoost score 0.1351, *worse than no
+   0.5614 on test 2019; its embeddings bolted onto XGBoost score 0.1351, *worse than no
    embeddings at all* (0.2113). Section 3.1's precomputed-embedding serving design cannot
    deliver the 2x, so Phase 4 must resolve how to serve the GNN before it can be promoted.
 
@@ -180,6 +180,12 @@ These were settled deliberately. Reopen only if new evidence appears.
   of features. After under-sampling the training graph is 277k nodes and peak VRAM is
   **154 MB**, so the constraint no longer binds -- but keep `NeighborLoader` for the 2M-node
   val/test graphs.
+- **Every velocity feature must use ONE notion of "previous".** `seconds_since_last`
+  originally used `ts.diff()` (which includes same-timestamp rows) while the window
+  aggregates used `closed="left"` (which excludes them). Serving queries `ts < :now` and
+  would have disagreed with training on 142,010 rows, silently. It is now bounded by the
+  largest window and strictly-earlier, matching everything else. Cost: champion test AUC-PR
+  0.3190 -> 0.2501, because the old number depended on a burst signal serving cannot see.
 - **Velocity is `closed="left"` offline and `ts < :now` online.** Both mean *strictly
   earlier*, so two transactions in the same minute are mutually invisible. 142,010 rows
   share a user and a minute, so this is not a corner case. A `<=` in the online SQL would
