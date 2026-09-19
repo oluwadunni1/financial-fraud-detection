@@ -28,6 +28,13 @@ api = [
     "sqlalchemy>=2.0",
     "shap>=0.46",
     "prometheus-client>=0.21",
+    # Serving scores the graph end to end (decision 3, reversed in Phase 3), so
+    # torch and PyG are runtime dependencies of the API, not just of training.
+    # Install the CPU-only torch build for the image: the forward pass measured
+    # 0.53 ms on CPU, so a GPU in the serving container would be dead weight and
+    # ~2.3 GB of cold start.
+    "torch>=2.4",
+    "torch-geometric>=2.6",
 ]
 gnn = [
     "torch>=2.4",

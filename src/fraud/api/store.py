@@ -115,9 +115,17 @@ _HISTORY_SQL = """
       from transaction_events
      where {key} = %(key)s
        and ts < %(now)s          -- STRICTLY before. See the module docstring.
+       and ts >= %(since)s       -- the velocity window; older rows affect nothing
      order by ts desc
      limit %(limit)s
 """
+
+
+# Velocity counts every row in its window, so the fetch must not truncate one.
+# A user averaging 1.4 transactions a day has ~10 rows in 168h; this cap is
+# generous enough to be unreachable in practice while still bounding a
+# pathological card.
+_HISTORY_ROW_CAP = 2000
 
 
 def fetch_neighbourhood(
@@ -125,22 +133,35 @@ def fetch_neighbourhood(
     user_id: int,
     merchant_id: int,
     now: dt.datetime,
-    limit: int,
+    history_hours: int,
 ) -> Neighbourhood:
-    """The card's and the merchant's recent past, in one round trip each.
+    """The card's and the merchant's recent past, one indexed read each.
+
+    Bounded by **time**, not by row count. That distinction is the difference
+    between correct velocity and silent skew: `velocity_count_168h` is a count
+    over a window, so fetching "the last 10 rows" would under-report it for any
+    card busier than that, and the model would see a number training never
+    produced. The graph takes the most recent few of these rows; velocity needs
+    all of them.
 
     Both queries ride `idx_txe_user_ts` / `idx_txe_merchant_ts`, which already
     existed for velocity -- the neighbourhood fetch added no new index.
     """
+    since = now - dt.timedelta(hours=history_hours)
     with conn.cursor() as cur:
         cur.execute(
             _HISTORY_SQL.format(key="user_id"),
-            {"key": user_id, "now": now, "limit": limit},
+            {"key": user_id, "now": now, "since": since, "limit": _HISTORY_ROW_CAP},
         )
         user_rows = cur.fetchall()
         cur.execute(
             _HISTORY_SQL.format(key="merchant_id"),
-            {"key": merchant_id, "now": now, "limit": limit},
+            {
+                "key": merchant_id,
+                "now": now,
+                "since": since,
+                "limit": _HISTORY_ROW_CAP,
+            },
         )
         merchant_rows = cur.fetchall()
 

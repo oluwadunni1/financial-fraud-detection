@@ -58,6 +58,7 @@ class Predictor:
         n_card_values: int,
         windows_hours: list[int],
         model_version: str,
+        max_neighbours: int = 10,
     ):
         self.model = model.eval()
         self.encoder = encoder
@@ -65,6 +66,7 @@ class Predictor:
         self.n_card_values = n_card_values
         self.windows_hours = windows_hours
         self.model_version = model_version
+        self.max_neighbours = max_neighbours
 
     # -- construction ------------------------------------------------------
     @classmethod
@@ -147,6 +149,7 @@ class Predictor:
             n_card_values=cards["n_card_values"],
             windows_hours=params["velocity"]["windows_hours"],
             model_version=version,
+            max_neighbours=params["serving"]["neighbours"],
         )
 
     # -- scoring -----------------------------------------------------------
@@ -173,6 +176,7 @@ class Predictor:
             self.encoder,
             self.card_mapping,
             self.n_card_values,
+            max_neighbours=self.max_neighbours,
         )
         # Node 0 of the transaction type is the arriving transaction.
         logit = self.model(graph.x_dict, graph.edge_index_dict)[0]

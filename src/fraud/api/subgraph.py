@@ -73,6 +73,7 @@ def build_request_graph(
     encoder: Encoder,
     card_mapping: dict[str, int],
     n_card_values: int,
+    max_neighbours: int = 10,
 ) -> HeteroData:
     """One arriving transaction plus its past, as the model's graph.
 
@@ -90,6 +91,11 @@ def build_request_graph(
     for frame in (neighbourhood.user_history, neighbourhood.merchant_history):
         if frame.is_empty():
             continue
+        # The store returns the whole velocity window because velocity counts
+        # all of it; the GRAPH only wants the nearest few, matching the offline
+        # second-hop fanout. Trimming here rather than in the query keeps
+        # velocity correct and the subgraph small.
+        frame = frame.head(max_neighbours)
         # A store that silently drops a column would otherwise surface as a
         # KeyError deep in the encoder, or worse, as a plausible wrong number.
         missing = [c for c in required if c not in frame.columns]

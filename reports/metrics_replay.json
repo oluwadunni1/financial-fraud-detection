@@ -1,0 +1,39 @@
+{
+  "mode": "in_process_causal",
+  "years": [
+    2019
+  ],
+  "model_version": "gnn-local-epoch19",
+  "seeded_rows": 33456,
+  "rows": 5000,
+  "seconds": 23.5,
+  "throughput_per_s": 212.8,
+  "cold_start_user": 1,
+  "cold_start_merchant": 416,
+  "latency_ms": {
+    "p50": 4.012147500361607,
+    "p95": 5.9050764491075824,
+    "p99": 8.242162980004657
+  },
+  "metrics": {
+    "rows": 5000,
+    "positives": 11,
+    "base_rate": 0.0022,
+    "auc_pr": 0.08538444156119926,
+    "auc_roc": 0.9825069698791887,
+    "threshold": 0.990214467048645,
+    "precision_at_100": 0.07,
+    "recall_at_100": 0.6363636363636364,
+    "precision_at_1000": 0.011,
+    "recall_at_1000": 1.0,
+    "confusion": {
+      "tp": 5,
+      "fp": 41,
+      "tn": 4948,
+      "fn": 6
+    },
+    "precision_at_threshold": 0.10869565217391304,
+    "recall_at_fpr_0.01": 0.45454545454545453,
+    "actual_fpr": 0.008218079775506114
+  }
+}
