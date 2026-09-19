@@ -89,7 +89,7 @@ def combined_card_id(n_card_values: int) -> pl.Expr:
 
 
 def select_training_ids(
-    txns: pl.LazyFrame, fraud_ratio: float, seed: int
+    txns: pl.LazyFrame, fraud_ratio: float, seed: int, dedupe: bool = False
 ) -> list[int]:
     """Which txn_ids form the under-sampled training graph.
 
@@ -109,13 +109,14 @@ def select_training_ids(
         .get_column("txn_id")
     )
 
-    # Dedupe non-fraud on the nominal predictors, streaming, ids only.
+    # The blueprint dedupes non-fraud on the nominal predictors here. Off by
+    # default: measured at 19x worse on test (see params.yaml:gnn), because it
+    # strips the repeated legitimate behaviour that dominates real traffic.
+    clean = txns.filter(pl.col(LABEL) == 0)
+    if dedupe:
+        clean = clean.unique(subset=list(DEDUPE_SUBSET), keep="first")
     deduped = (
-        txns.filter(pl.col(LABEL) == 0)
-        .unique(subset=list(DEDUPE_SUBSET), keep="first")
-        .select("txn_id")
-        .collect(engine="streaming")
-        .get_column("txn_id")
+        clean.select("txn_id").collect(engine="streaming").get_column("txn_id")
     )
 
     # Sort before sampling. `unique` under the streaming engine does not
@@ -258,7 +259,9 @@ def build(
         # ONLY train is under-sampled. That is the deviation from the blueprint
         # that keeps val/test at the real 0.122% and the metrics comparable.
         if split == "train" and cfg["under_sample"]:
-            keep_ids = select_training_ids(split_txns, cfg["fraud_ratio"], seed)
+            keep_ids = select_training_ids(
+                split_txns, cfg["fraud_ratio"], seed, cfg["dedupe_non_fraud"]
+            )
             selector = pl.col("txn_id").is_in(keep_ids)
             split_txns = split_txns.filter(selector)
             split_matrix = split_matrix.filter(selector)

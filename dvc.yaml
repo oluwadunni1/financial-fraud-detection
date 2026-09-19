@@ -194,3 +194,64 @@ stages:
       - data/graph
       - reports/graph_summary.json:
           cache: false
+
+  train_gnn:
+    desc: >
+      Heterogeneous GraphSAGE on the tri-partite graph. Validation AUC-PR peaks
+      early (~epoch 17) and degrades after, so epochs is set low deliberately.
+    cmd: .venv/bin/python -m fraud.models.gnn
+    deps:
+      - data/graph
+      - src/fraud/config.py
+      - src/fraud/models/gnn.py
+      - src/fraud/models/metrics.py
+    params:
+      - paths.graph
+      - paths.models
+      - gnn
+    outs:
+      - data/models/gnn
+
+  gnn_embeddings:
+    desc: The 64-d user and merchant embeddings Phase 4 serves from Postgres.
+    cmd: .venv/bin/python -m fraud.models.gnn_embeddings
+    deps:
+      - data/graph
+      - data/models/gnn
+      - src/fraud/config.py
+      - src/fraud/models/gnn_embeddings.py
+    params:
+      - paths.graph
+      - paths.models
+      - paths.embeddings
+      - paths.embeddings_summary
+      - gnn
+    outs:
+      - data/features/embeddings
+      - reports/embeddings_summary.json:
+          cache: false
+
+  evaluate_gnn:
+    desc: >
+      The ablation that answers the project's question: identical XGBoost head,
+      identical rows, with and without the GNN embeddings. The delta is the
+      structural contribution with the tree-vs-net difference cancelled out.
+    cmd: .venv/bin/python -m fraud.models.evaluate_gnn
+    deps:
+      - data/features/embeddings
+      - data/features/matrix
+      - data/graph
+      - src/fraud/config.py
+      - src/fraud/models/evaluate_gnn.py
+      - src/fraud/models/metrics.py
+    params:
+      - paths.graph
+      - paths.embeddings
+      - paths.feature_matrix
+      - paths.metrics_gnn
+      - evaluate
+      - xgboost
+      - split
+    outs:
+      - reports/metrics_gnn.json:
+          cache: false

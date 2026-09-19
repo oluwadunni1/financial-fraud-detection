@@ -1,0 +1,30 @@
+{
+  "model_version": "gnn-v1-epoch17",
+  "splits": {
+    "train": {
+      "users": 4704,
+      "merchants": 19740,
+      "dim": 64,
+      "user_norm_mean": 4.200922012329102,
+      "merchant_norm_mean": 4.4496049880981445,
+      "any_nan": false
+    },
+    "val": {
+      "users": 4006,
+      "merchants": 34793,
+      "dim": 64,
+      "user_norm_mean": 3.8071300983428955,
+      "merchant_norm_mean": 3.756695508956909,
+      "any_nan": false
+    },
+    "test": {
+      "users": 5141,
+      "merchants": 38927,
+      "dim": 64,
+      "user_norm_mean": 3.6849820613861084,
+      "merchant_norm_mean": 3.8549492359161377,
+      "any_nan": false
+    }
+  },
+  "seconds": 74.9
+}

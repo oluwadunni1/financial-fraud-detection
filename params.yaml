@@ -19,6 +19,9 @@ paths:
   encoder: data/features/encoder.json
   metrics_report: reports/metrics_xgb.json
   graph_summary: reports/graph_summary.json
+  embeddings: data/features/embeddings
+  embeddings_summary: reports/embeddings_summary.json
+  metrics_gnn: reports/metrics_gnn.json
   registry_report: reports/registry.json
 
 ingest:
@@ -118,6 +121,20 @@ gnn:
   # metric incomparable to the champion. Train like NVIDIA, evaluate for real.
   under_sample: true
   fraud_ratio: 0.1
+  # NVIDIA also drops duplicate non-fraud rows on the nominal predictors before
+  # under-sampling. We MEASURED what that costs when you evaluate on the real
+  # distribution, training the same XGBoost on two 277k sets differing only in
+  # this flag:
+  #
+  #   deduped + under-sampled   val 0.0894   test2019 0.0089
+  #   under-sampled only        val 0.3541   test2019 0.1715   <- 19x better
+  #   champion (20.6M rows)     val 0.5181   test2019 0.3190
+  #
+  # The dedupe removes repeated legitimate behaviour -- the same card at the
+  # same merchant, over and over -- which is most of real traffic, so the model
+  # never learns what normal looks like. It is harmless for NVIDIA because they
+  # also evaluate on the deduped distribution. It is ruinous for us.
+  dedupe_non_fraud: false
   hidden_channels: 128
   embedding_dim: 64
   num_layers: 2
