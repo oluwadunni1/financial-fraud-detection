@@ -408,8 +408,9 @@ stages:
       isexec: true
     - path: src/fraud/features/graph.py
       hash: md5
-      md5: cc29d88e3aa0ff3f79d47dd2d134139b
-      size: 13143
+      md5: 0c45eaf08bd620693f5f972da8124129
+      size: 13400
+      isexec: true
     params:
       params.yaml:
         gnn.fraud_ratio: 0.1
@@ -426,10 +427,185 @@ stages:
     outs:
     - path: data/graph
       hash: md5
-      md5: 4bd4e7210cbf77d6e9d701fc100ef238.dir
-      size: 163029325
+      md5: bed848867e3fecb944fa57a6bac0f36e.dir
+      size: 161595534
       nfiles: 15
     - path: reports/graph_summary.json
       hash: md5
-      md5: 96a15e130230ca2d9bbd19550801c63c
+      md5: 2dd5db819ef152410244a7aec60e019a
       size: 1531
+      isexec: true
+  train_gnn:
+    cmd: .venv/bin/python -m fraud.models.gnn
+    deps:
+    - path: data/graph
+      hash: md5
+      md5: bed848867e3fecb944fa57a6bac0f36e.dir
+      size: 161595534
+      nfiles: 15
+    - path: src/fraud/config.py
+      hash: md5
+      md5: 15b58a3afbc5288c8e2113506e439a84
+      size: 1196
+      isexec: true
+    - path: src/fraud/models/gnn.py
+      hash: md5
+      md5: 7e0112496f4920e1eb24f948cbc60d74
+      size: 11548
+      isexec: true
+    - path: src/fraud/models/metrics.py
+      hash: md5
+      md5: 8c61219f8569b24773965b34d8cde696
+      size: 4916
+      isexec: true
+    params:
+      params.yaml:
+        gnn:
+          under_sample: true
+          fraud_ratio: 0.1
+          dedupe_non_fraud: false
+          hidden_channels: 128
+          embedding_dim: 64
+          num_layers: 2
+          num_neighbors:
+          - 25
+          - 10
+          batch_size: 4096
+          learning_rate: 0.001
+          epochs: 20
+          dropout: 0.3
+          random_state: 42
+        paths.graph: data/graph
+        paths.models: data/models
+    outs:
+    - path: data/models/gnn
+      hash: md5
+      md5: 95992c53dc634d2ca814a8cf28b22299.dir
+      size: 444087
+      nfiles: 2
+  gnn_embeddings:
+    cmd: .venv/bin/python -m fraud.models.gnn_embeddings
+    deps:
+    - path: data/graph
+      hash: md5
+      md5: bed848867e3fecb944fa57a6bac0f36e.dir
+      size: 161595534
+      nfiles: 15
+    - path: data/models/gnn
+      hash: md5
+      md5: 95992c53dc634d2ca814a8cf28b22299.dir
+      size: 444087
+      nfiles: 2
+    - path: src/fraud/config.py
+      hash: md5
+      md5: 15b58a3afbc5288c8e2113506e439a84
+      size: 1196
+      isexec: true
+    - path: src/fraud/models/gnn_embeddings.py
+      hash: md5
+      md5: 4d158ea7374ed44202a78abbbba281cc
+      size: 6118
+      isexec: true
+    params:
+      params.yaml:
+        gnn:
+          under_sample: true
+          fraud_ratio: 0.1
+          dedupe_non_fraud: false
+          hidden_channels: 128
+          embedding_dim: 64
+          num_layers: 2
+          num_neighbors:
+          - 25
+          - 10
+          batch_size: 4096
+          learning_rate: 0.001
+          epochs: 20
+          dropout: 0.3
+          random_state: 42
+        paths.embeddings: data/features/embeddings
+        paths.embeddings_summary: reports/embeddings_summary.json
+        paths.graph: data/graph
+        paths.models: data/models
+    outs:
+    - path: data/features/embeddings
+      hash: md5
+      md5: b98052aa564fbde545c321d707a2e2dd.dir
+      size: 32120830
+      nfiles: 6
+    - path: reports/embeddings_summary.json
+      hash: md5
+      md5: a2a58433b68ebc84408bc6da189561f5
+      size: 674
+      isexec: true
+  evaluate_gnn:
+    cmd: .venv/bin/python -m fraud.models.evaluate_gnn
+    deps:
+    - path: data/features/embeddings
+      hash: md5
+      md5: b98052aa564fbde545c321d707a2e2dd.dir
+      size: 32120830
+      nfiles: 6
+    - path: data/features/matrix
+      hash: md5
+      md5: 908c31ea2fb0940b185b447b1f1bd970.dir
+      size: 803821823
+      nfiles: 30
+    - path: data/graph
+      hash: md5
+      md5: bed848867e3fecb944fa57a6bac0f36e.dir
+      size: 161595534
+      nfiles: 15
+    - path: src/fraud/config.py
+      hash: md5
+      md5: 15b58a3afbc5288c8e2113506e439a84
+      size: 1196
+      isexec: true
+    - path: src/fraud/models/evaluate_gnn.py
+      hash: md5
+      md5: 79e62c40c834005c6007a99d240acfe8
+      size: 10464
+      isexec: true
+    - path: src/fraud/models/metrics.py
+      hash: md5
+      md5: 8c61219f8569b24773965b34d8cde696
+      size: 4916
+      isexec: true
+    params:
+      params.yaml:
+        evaluate:
+          target_false_positive_rate: 0.01
+          precision_at_k:
+          - 100
+          - 1000
+        paths.embeddings: data/features/embeddings
+        paths.feature_matrix: data/features/matrix
+        paths.graph: data/graph
+        paths.metrics_gnn: reports/metrics_gnn.json
+        split:
+          train_end_year: 2017
+          val_year: 2018
+        xgboost:
+          n_estimators: 500
+          max_depth: 8
+          learning_rate: 0.05
+          subsample: 0.8
+          colsample_bytree: 0.8
+          scale_pos_weight: 10
+          scale_pos_weight_grid:
+          - 1
+          - 10
+          - 50
+          - 200
+          - 819
+          sweep_sample_fraction: 0.15
+          sweep_n_estimators: 150
+          eval_metric: aucpr
+          early_stopping_rounds: 50
+          random_state: 42
+    outs:
+    - path: reports/metrics_gnn.json
+      hash: md5
+      md5: 7a6ced9fb8348df5bb7791746019f04a
+      size: 5102
+      isexec: true

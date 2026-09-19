@@ -177,7 +177,20 @@ Both are dataset properties, not pipeline bugs. Name them in the README.
 
 ### 3.1 The serving path (the core design decision)
 
-Settled in discussion: **precomputed embeddings + live velocity features.**
+> **REVISED 2026-09-19 by Phase 3's measurement.** This section originally specified
+> precomputed embeddings plus a downstream head. That design was shown to discard the
+> GNN's entire advantage: frozen embeddings score **0.1351** against a **0.2113** base,
+> while the same model end to end scores **0.6474**. Serving now fetches a small
+> neighbourhood per request and scores the graph directly. Velocity features are
+> unaffected -- they remain live SQL aggregates, computed by the shared module.
+>
+> The fetch is cheaper than it sounds: ~25 nodes (the transaction, its card, its merchant,
+> ~10 sampled neighbours each), a ~30k-parameter forward pass, and the two indexes it
+> needs (`idx_txe_user_ts`, `idx_txe_merchant_ts`) already exist for velocity and can
+> share the round trip. The open cost is latency against the <100ms target, to be measured
+> in Phase 4, and torch in the API image.
+
+Originally settled in discussion: **precomputed embeddings + live velocity features.**
 
 ```
 txn arrives

@@ -1,0 +1,10 @@
+{
+  "run_id": "208e80f5ba834c7dbefbde8149d6641d",
+  "registered_model": "fraud-champion",
+  "version": "2",
+  "alias": "challenger",
+  "model_uri": "models:/fraud-champion@challenger",
+  "challenger_auc_pr": 0.6474001664740605,
+  "champion_version": "1",
+  "promotion": "deferred -- serving path cannot run this model yet"
+}

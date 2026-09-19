@@ -72,9 +72,17 @@ These were settled deliberately. Reopen only if new evidence appears.
 1. **The NVIDIA training container is not used.** It is NGC-gated and opaque; you cannot
    version or instrument what you cannot see. The GNN is rebuilt in open PyTorch Geometric.
 2. **Triton is not in the serving path.** CPU-servable champion behind FastAPI instead.
-3. **Serving uses precomputed embeddings + live velocity features**, not live neighbourhood
-   lookup. Frozen user/merchant embeddings from Postgres, plus velocity aggregates computed
-   live in SQL. See ARCHITECTURE.md section 3.1 for why.
+3. ~~**Serving uses precomputed embeddings + live velocity features**, not live
+   neighbourhood lookup.~~ **REVERSED 2026-09-19.** Serving fetches the card's and
+   merchant's recent transactions and scores the GNN **end to end** over a ~25-node
+   subgraph, alongside live velocity aggregates. The original decision was made on latency
+   grounds before we had evidence: frozen embeddings score **0.1351** against a 0.2113
+   base, while the same GNN end to end scores **0.6474**. Flattening does not merely fail
+   to help, it costs the entire 2x. The subgraph is tiny, the model is ~30k parameters, and
+   `transaction_events` already carries `idx_txe_user_ts` / `idx_txe_merchant_ts` -- the
+   exact two lookups needed, already there for velocity. Cost: torch in the API image
+   (~200 MB CPU wheel) and a latency budget that must be re-measured against the <100ms
+   target.
 4. **Supabase is a rolling hot store, not an archive.** The full 24.4M-row history stays
    in DVC-tracked Parquet (`data/processed/`, 538 MB). Free tier is 500 MB; the full table
    plus indexes measures ~6.2 GB, 12.4x over.
