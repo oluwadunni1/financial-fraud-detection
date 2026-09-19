@@ -104,20 +104,58 @@ def _to_frame(rows: list[dict[str, Any]]) -> pl.DataFrame:
     return pl.DataFrame(rows).rename(_DB_TO_CANONICAL)
 
 
-_HISTORY_SQL = """
-    select txn_id, user_id, ts, amount, merchant, state, merchant_id,
-           city, zip, errors, chip, time_min, month, day,
-           velocity_count_1h, velocity_amount_1h, velocity_merchants_1h,
-           velocity_states_1h, velocity_count_24h, velocity_amount_24h,
-           velocity_merchants_24h, velocity_states_24h, velocity_count_168h,
-           velocity_amount_168h, velocity_merchants_168h, velocity_states_168h,
-           velocity_seconds_since_last
+_HISTORY_COLUMNS = """
+    txn_id, user_id, ts, amount, merchant, state, merchant_id,
+    city, zip, errors, chip, time_min, month, day,
+    velocity_count_1h, velocity_amount_1h, velocity_merchants_1h,
+    velocity_states_1h, velocity_count_24h, velocity_amount_24h,
+    velocity_merchants_24h, velocity_states_24h, velocity_count_168h,
+    velocity_amount_168h, velocity_merchants_168h, velocity_states_168h,
+    velocity_seconds_since_last
+"""
+
+# The card's history serves two consumers with different needs, so it is the
+# union of two bounded reads rather than one compromise:
+#
+#   velocity  every row in the window. A count over a window truncated by row
+#             count under-reports, and the model sees a number training never
+#             produced.
+#   the graph the N most recent rows, HOWEVER OLD. The offline graph's user
+#             node aggregates transactions sampled across the whole split, so
+#             capping the graph at the velocity window shows it one week of a
+#             card that training saw a year of. Measured at 0.5339 -> 0.5804
+#             AUC-PR on a June 2019 slice -- and the 168h bound never had a
+#             justification for the graph, only for velocity.
+#
+# Both arms ride idx_txe_user_ts, and both are bounded.
+_USER_HISTORY_SQL = f"""
+    (select {_HISTORY_COLUMNS}
+       from transaction_events
+      where user_id = %(key)s
+        and ts < %(now)s          -- STRICTLY before. See the module docstring.
+        and ts >= %(since)s       -- the velocity window
+      order by ts desc
+      limit %(limit)s)
+    union
+    (select {_HISTORY_COLUMNS}
+       from transaction_events
+      where user_id = %(key)s
+        and ts < %(now)s
+      order by ts desc
+      limit %(graph_rows)s)
+    order by ts desc
+"""
+
+# The merchant side feeds the graph only -- velocity reads user history alone --
+# so it is a pure row-count lookup with no age bound, matching the offline
+# merchant node.
+_MERCHANT_HISTORY_SQL = f"""
+    select {_HISTORY_COLUMNS}
       from transaction_events
-     where {key} = %(key)s
-       and ts < %(now)s          -- STRICTLY before. See the module docstring.
-       and ts >= %(since)s       -- the velocity window; older rows affect nothing
+     where merchant_id = %(key)s
+       and ts < %(now)s
      order by ts desc
-     limit %(limit)s
+     limit %(graph_rows)s
 """
 
 
@@ -134,15 +172,12 @@ def fetch_neighbourhood(
     merchant_id: int,
     now: dt.datetime,
     history_hours: int,
+    graph_rows: int,
 ) -> Neighbourhood:
-    """The card's and the merchant's recent past, one indexed read each.
+    """The card's and the merchant's recent past, two indexed reads.
 
-    Bounded by **time**, not by row count. That distinction is the difference
-    between correct velocity and silent skew: `velocity_count_168h` is a count
-    over a window, so fetching "the last 10 rows" would under-report it for any
-    card busier than that, and the model would see a number training never
-    produced. The graph takes the most recent few of these rows; velocity needs
-    all of them.
+    `history_hours` bounds VELOCITY; `graph_rows` bounds the GRAPH. They are
+    separate because they measure different things -- see _USER_HISTORY_SQL.
 
     Both queries ride `idx_txe_user_ts` / `idx_txe_merchant_ts`, which already
     existed for velocity -- the neighbourhood fetch added no new index.
@@ -150,18 +185,19 @@ def fetch_neighbourhood(
     since = now - dt.timedelta(hours=history_hours)
     with conn.cursor() as cur:
         cur.execute(
-            _HISTORY_SQL.format(key="user_id"),
-            {"key": user_id, "now": now, "since": since, "limit": _HISTORY_ROW_CAP},
-        )
-        user_rows = cur.fetchall()
-        cur.execute(
-            _HISTORY_SQL.format(key="merchant_id"),
+            _USER_HISTORY_SQL,
             {
-                "key": merchant_id,
+                "key": user_id,
                 "now": now,
                 "since": since,
                 "limit": _HISTORY_ROW_CAP,
+                "graph_rows": graph_rows,
             },
+        )
+        user_rows = cur.fetchall()
+        cur.execute(
+            _MERCHANT_HISTORY_SQL,
+            {"key": merchant_id, "now": now, "graph_rows": graph_rows},
         )
         merchant_rows = cur.fetchall()
 

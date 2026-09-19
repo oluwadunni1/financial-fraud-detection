@@ -25,7 +25,6 @@ from typing import Any
 import numpy as np
 import torch
 from torch_geometric.data import HeteroData
-from torch_geometric.transforms import ToUndirected
 
 from fraud.api.store import Neighbourhood
 from fraud.features.encoders import UNKNOWN_ORDINAL, Encoder, binary_width
@@ -88,8 +87,15 @@ def build_request_graph(
 
     required = (*encoder.one_hot, *encoder.binary, *encoder.numeric)
     rows = [{**transaction, **velocity}]
+    # Kept apart, because they attach to different nodes. The card's recent
+    # transactions happened at OTHER merchants, and the merchant's recent
+    # transactions belong to OTHER cards -- wiring both groups to both id nodes
+    # asserts edges that are false and pollutes each node's aggregate with
+    # roughly 50% foreign rows.
+    counts = []
     for frame in (neighbourhood.user_history, neighbourhood.merchant_history):
         if frame.is_empty():
+            counts.append(0)
             continue
         # The store returns the whole velocity window because velocity counts
         # all of it; the GRAPH only wants the nearest few, matching the offline
@@ -105,6 +111,8 @@ def build_request_graph(
                 f"{missing}. The store must return every encoder input."
             )
         rows.extend(frame.to_dicts())
+        counts.append(frame.height)
+    n_user_rows, n_merchant_rows = counts
 
     encoded = encoder.transform_rows(rows)[:, keep]
     x_txn = torch.from_numpy(np.ascontiguousarray(encoded))
@@ -128,17 +136,43 @@ def build_request_graph(
         dtype=torch.float32,
     )
 
-    # Every transaction node hangs off the one card and the one merchant. That
-    # is a faithful miniature of the offline graph from this request's point of
-    # view: two hops of the card's and merchant's recent activity.
-    n_txn = x_txn.shape[0]
-    data[USER, "transacts", TXN].edge_index = torch.stack(
-        [torch.zeros(n_txn, dtype=torch.long), torch.arange(n_txn)]
-    )
-    data[TXN, "at", MERCHANT].edge_index = torch.stack(
-        [torch.arange(n_txn), torch.zeros(n_txn, dtype=torch.long)]
+    # The model is 2-layer, so the arriving transaction's representation is
+    # f(its own features, user_node^(1), merchant_node^(1)) -- and those two are
+    # aggregates over the RAW features of their own transactions. Nothing deeper
+    # reaches node 0. Two things therefore have to be right:
+    #
+    #   which transactions hang off which id node
+    #       user node      <- the CARD's recent transactions
+    #       merchant node  <- the MERCHANT's recent transactions
+    #     Attaching every row to both makes each aggregate ~50% rows that were
+    #     never there.
+    #
+    #   the arriving transaction must NOT be inside its own id nodes' aggregates
+    #     It has to RECEIVE from them, but offline it is only one candidate
+    #     among the ~280 a card has in the split, and NeighborLoader usually
+    #     does not draw it. Letting ToUndirected make that edge bidirectional
+    #     puts a copy of the seed into both aggregates every single time, and
+    #     the self-echo measured 0.6945 -> 0.6427 AUC-PR on a June 2019 slice.
+    #
+    # So the four edge types are written out rather than derived: direction is
+    # the thing being controlled, and ToUndirected controls it wrongly here.
+    def zeros(n: int) -> torch.Tensor:
+        return torch.zeros(n, dtype=torch.long)
+
+    one = torch.zeros(1, dtype=torch.long)
+    user_neighbours = torch.arange(1, 1 + n_user_rows)
+    merchant_neighbours = torch.arange(
+        1 + n_user_rows, 1 + n_user_rows + n_merchant_rows
     )
 
-    # Without this the merchant side is unreachable from a transaction node --
-    # the same trap the offline builder documents.
-    return ToUndirected()(data)
+    # hop 1: the id nodes send to the arriving transaction.
+    data[USER, "transacts", TXN].edge_index = torch.stack([one, one])
+    data[MERCHANT, "rev_at", TXN].edge_index = torch.stack([one, one])
+    # hop 2: the neighbours send to the id nodes -- the arriving one does not.
+    data[TXN, "rev_transacts", USER].edge_index = torch.stack(
+        [user_neighbours, zeros(n_user_rows)]
+    )
+    data[TXN, "at", MERCHANT].edge_index = torch.stack(
+        [merchant_neighbours, zeros(n_merchant_rows)]
+    )
+    return data

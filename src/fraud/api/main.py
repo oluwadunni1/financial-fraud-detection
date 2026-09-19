@@ -134,6 +134,7 @@ def predict(transaction: Transaction) -> PredictionResponse:
         merchant_id=int(features["Merchant"]),
         now=features["ts"],
         history_hours=params["serving"]["history_hours"],
+        graph_rows=params["serving"]["neighbours"],
     )
 
     # 3. Score.

@@ -180,3 +180,82 @@ def test_neighbour_missing_encoder_columns_fails_loudly():
             transaction(), VELOCITY, Neighbourhood(broken, EMPTY),
             ENCODER, CARD_MAPPING, N_CARDS,
         )
+
+
+# --- the two histories attach to DIFFERENT nodes -------------------------
+# The shape tests above all passed while every neighbour was wired to both id
+# nodes, which is why they are not enough on their own. A card's recent
+# transactions happened at other merchants and a merchant's recent transactions
+# belong to other cards, so mixing them makes each aggregate ~50% rows that
+# were never there -- a wrong number, never an exception.
+
+def build_both(user_n: int, merchant_n: int):
+    user = neighbour_frame(user_n) if user_n else EMPTY
+    merchant = (
+        pl.DataFrame(
+            [
+                {**transaction(txn_id=900 + i, User=50 + i, Amount=float(i)), **VELOCITY}
+                for i in range(merchant_n)
+            ]
+        )
+        if merchant_n
+        else EMPTY
+    )
+    return build_request_graph(
+        transaction(), VELOCITY, Neighbourhood(user, merchant),
+        ENCODER, CARD_MAPPING, N_CARDS,
+    )
+
+
+def senders_to_user(data) -> set[int]:
+    """Transaction nodes whose features enter the user node's aggregate."""
+    src, dst = data[TXN, "rev_transacts", USER].edge_index
+    return {int(s) for s, d in zip(src.tolist(), dst.tolist(), strict=True) if d == 0}
+
+
+def senders_to_merchant(data) -> set[int]:
+    src, dst = data[TXN, "at", MERCHANT].edge_index
+    return {int(s) for s, d in zip(src.tolist(), dst.tolist(), strict=True) if d == 0}
+
+
+def test_user_node_aggregates_only_the_cards_own_transactions():
+    data = build_both(user_n=3, merchant_n=4)
+    assert senders_to_user(data) == {1, 2, 3}
+
+
+def test_merchant_node_aggregates_only_its_own_transactions():
+    data = build_both(user_n=3, merchant_n=4)
+    assert senders_to_merchant(data) == {4, 5, 6, 7}
+
+
+def test_the_arriving_transaction_is_not_in_its_own_aggregates():
+    """The self-echo, worth 0.6945 -> 0.6427 AUC-PR on a June 2019 slice.
+
+    Node 0 must RECEIVE from both id nodes, but must not be inside what they
+    aggregate. Offline it is one candidate among the ~280 a card has in the
+    split and NeighborLoader usually does not draw it; ToUndirected would put
+    it there on every single request.
+    """
+    data = build_both(user_n=2, merchant_n=2)
+    assert 0 not in senders_to_user(data)
+    assert 0 not in senders_to_merchant(data)
+    # ...but it still receives from both, or the graph contributes nothing.
+    assert data[USER, "transacts", TXN].edge_index.tolist() == [[0], [0]]
+    assert data[MERCHANT, "rev_at", TXN].edge_index.tolist() == [[0], [0]]
+
+
+@pytest.mark.parametrize("user_n,merchant_n", [(0, 0), (0, 5), (5, 0), (10, 10)])
+def test_edge_counts_track_each_history_independently(user_n, merchant_n):
+    data = build_both(user_n, merchant_n)
+    assert len(senders_to_user(data)) == user_n
+    assert len(senders_to_merchant(data)) == merchant_n
+    assert data.x_dict[TXN].shape[0] == user_n + merchant_n + 1
+
+
+def test_all_four_edge_types_are_present_even_with_no_neighbours():
+    """A missing edge type changes the model's metadata and its behaviour."""
+    types = {tuple(e) for e in build_both(0, 0).edge_types}
+    assert types == {
+        (USER, "transacts", TXN), (MERCHANT, "rev_at", TXN),
+        (TXN, "rev_transacts", USER), (TXN, "at", MERCHANT),
+    }

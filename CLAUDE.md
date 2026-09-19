@@ -42,13 +42,12 @@ phases; section 10 is the Lightning AI setup.
 
 ## Current state (update as phases complete)
 
-**Phase 3 modelling complete (2026-09-19).** GraphSAGE beats the XGBoost champion
-**0.5614 vs 0.2501** test-2019 AUC-PR -- relational structure matters, and by 2.2x. But
-flattening it to embeddings-as-features destroys the gain (0.1351), so the section 3.1
-serving design cannot deliver it. Promotion deferred; see ARCHITECTURE section 6 Phase 3.
+**Phase 4 complete (2026-09-19).** The causal replay settled the question Phase 3 could
+not: GraphSAGE served honestly scores **0.4667** AUC-PR on 2019 against the offline
+**0.5614** and the XGBoost champion's **0.2501**. The offline number was ~17% optimistic,
+not fake -- measured leakage is worth about 1%. Serving is FastAPI + a per-request
+subgraph, p50 5.4ms / p95 13.0ms, well inside the <100ms target.
 
-| | Status |
-|---|---|
 | Scaffold (`pyproject.toml`, `params.yaml`, `src/fraud/`, `sql/`) | Done |
 | TabFormer data downloaded | **Yes** -- 24,386,900 rows, 2.35 GB, DVC-tracked |
 | Python env installed | **Yes** -- `.venv`, CPython 3.12.13, `[dev]` extras |
@@ -60,7 +59,9 @@ serving design cannot deliver it. Promotion deferred; see ARCHITECTURE section 6
 | Processed data | **Done** -- 30 year partitions, 538 MB Parquet (from 2.35 GB CSV) |
 | Features | **Done** -- 86 columns (69 encoded + 4 numeric + 13 velocity) |
 | Champion | **Registered** -- `models:/fraud-champion@champion`, AUC-PR 0.3190 |
-| Tests | **117 passing** across 7 files |
+| Serving | **Done** -- FastAPI `/predict`, per-request subgraph, p50 5.4ms / p95 13.0ms |
+| Causal replay | **Done** -- 1,723,938 rows of 2019, AUC-PR **0.4667**, P@100 0.710 |
+| Tests | **189 passing** across 11 files |
 
 Measured dataset facts now live in `docs/ARCHITECTURE.md` section 2.1. Read that before
 writing any feature code -- several of them contradict what the scaffolding assumed.
@@ -131,6 +132,19 @@ These were settled deliberately. Reopen only if new evidence appears.
    0.5614 on test 2019; its embeddings bolted onto XGBoost score 0.1351, *worse than no
    embeddings at all* (0.2113). Section 3.1's precomputed-embedding serving design cannot
    deliver the 2x, so Phase 4 must resolve how to serve the GNN before it can be promoted.
+18. **The causal replay is the number we report, not the offline one.** Offline 0.5614
+   vs served 0.4667 on 2019. The gap is NOT leakage -- letting the graph see the future
+   is worth ~1%. It is that offline samples 10 neighbours spread across the card's whole
+   period while serving takes the 10 most recent, which is what an indexed lookup can
+   cheaply return. A defensible tradeoff, recorded rather than closed.
+19. **A sharded replay must be proven equal to the sequential one, not assumed.** The
+   first attempt differed on 2,659 of 20,000 rows because shard seeding stopped at
+   2019-01-01 while the sequential run's history reaches one velocity window further
+   back. Both bounds now match and the two agree to one float32 ULP. `--shards 4` cut
+   2019 from ~2.2h to 53 min.
+20. **Pin torch to one thread for per-request scoring.** On ~21-node graphs
+   `threads=4` measured **10 rows/s** against `threads=1` at **178** -- torch thrashes on
+   work far too small to parallelise, and it starves the shards of cores.
 
 ## Conventions
 
@@ -153,6 +167,22 @@ These were settled deliberately. Reopen only if new evidence appears.
 - **The two embedding sources have different shapes.** GNN gives 64-d user *and* merchant
   embeddings; the foundation model gives 512-d user embeddings only. Separate tables
   (pgvector dims are fixed per column) and different assembled feature vectors.
+- **A per-request subgraph can be the right shape and still be wrong.** Three defects
+  got through shape tests because every one of them returns a confident number rather
+  than an exception. Each was worth more than the model:
+  1. Wiring every neighbour to BOTH id nodes. The card's recent transactions happened at
+     other merchants and the merchant's belong to other cards, so each identity node
+     averaged ~50% rows that were never connected to it. Cost **4.4x** -- and it showed
+     up as inflated scores on legitimate rows (0.1091 vs 0.0536), not as missed fraud.
+  2. Letting the 168h velocity window bound the GRAPH. Nothing older can affect a
+     velocity feature, but the offline user node aggregates across the whole split, so
+     serving saw one week of a card that training saw a year of. Cost **8%**.
+  3. `ToUndirected` putting the arriving transaction inside its own id nodes' aggregates.
+     It must RECEIVE from them; offline it is one candidate among ~280 and
+     `NeighborLoader` usually does not draw it. Cost **7.5%**.
+  The tests that catch these assert *edge attribution*, not node counts. Write the four
+  edge types explicitly -- direction is the thing being controlled, and `ToUndirected`
+  controls it wrongly here.
 - **Fraud rate is ~0.1%.** Accuracy is a useless metric here. Use AUC-PR, precision@k, and
   recall at a fixed FPR.
 - **Write Parquet, not CSV.** The blueprint's `to_csv` calls would turn a ~3 GB feature

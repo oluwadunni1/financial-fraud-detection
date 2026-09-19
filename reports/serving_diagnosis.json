@@ -1,0 +1,39 @@
+{
+  "question": "Was Phase 3's offline 0.5614 inflated by the offline graph seeing the future?",
+  "verdict": "No. Measured leakage is ~1%. The 14.6x collapse first seen in the causal replay was three defects in the serving path, since fixed. The offline number is optimistic by ~17%, and the residual is neighbour breadth, not foresight.",
+  "slice": {
+    "period": "2019-06",
+    "rows": 142399,
+    "frauds": 215,
+    "offline_reference": 0.7015315335270363
+  },
+  "ladder_auc_pr": {
+    "replay_with_edge_bug": 0.12046616048059637,
+    "replay_edges_fixed": 0.5339198696095093,
+    "replay_no_age_cap": 0.5804127239238802,
+    "replay_anticausal": 0.5871678886994908,
+    "offline_sampler_reproduced": 0.6945040637397498,
+    "offline_sampler_plus_selfecho": 0.642703775676467,
+    "offline_actual": 0.7015315335270363
+  },
+  "attribution": {
+    "edge_misattribution": "4.4x -- every neighbour wired to both id nodes",
+    "graph_capped_at_velocity_window": "8% -- 168h bounds velocity, never the graph",
+    "self_echo": "7.5% -- ToUndirected put the seed in its own aggregate",
+    "neighbour_breadth": "~10% -- 10 recent vs 10 spread; a deliberate tradeoff",
+    "genuine_leakage": "~1% -- anti-causal minus causal, once history is unbounded"
+  },
+  "mechanism": {
+    "note": "The edge bug was a PRECISION collapse, not a recall one: frauds kept scoring correctly while legitimate rows were inflated.",
+    "mean_score_on_frauds": {
+      "offline": 0.9474847316741943,
+      "replay_buggy": 0.9425461183280446
+    },
+    "mean_score_on_legit": {
+      "offline": 0.053572263568639755,
+      "replay_buggy": 0.10913963887568973,
+      "replay_fixed": 0.061067586403801485
+    }
+  },
+  "harness_validation": "Rebuilding NeighborLoader's sampling by hand scored 0.6945 against the real 0.7015, so the comparison was trustworthy before it was used to attribute blame."
+}

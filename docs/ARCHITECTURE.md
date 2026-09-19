@@ -177,18 +177,23 @@ Both are dataset properties, not pipeline bugs. Name them in the README.
 
 ### 3.1 The serving path (the core design decision)
 
-> **REVISED 2026-09-19 by Phase 3's measurement.** This section originally specified
-> precomputed embeddings plus a downstream head. That design was shown to discard the
-> GNN's entire advantage: frozen embeddings score **0.1351** against a **0.2113** base,
-> while the same model end to end scores **0.6474**. Serving now fetches a small
-> neighbourhood per request and scores the graph directly. Velocity features are
-> unaffected -- they remain live SQL aggregates, computed by the shared module.
+> **REVISED 2026-09-19 by Phase 3, then MEASURED by Phase 4's causal replay.** This
+> section originally specified precomputed embeddings plus a downstream head. That design
+> discards the GNN's entire advantage: frozen embeddings score **0.1351** against a
+> **0.2113** base, while the same model end to end scores **0.5614** offline. Serving now
+> fetches a small neighbourhood per request and scores the graph directly.
 >
-> The fetch is cheaper than it sounds: ~25 nodes (the transaction, its card, its merchant,
-> ~10 sampled neighbours each), a ~30k-parameter forward pass, and the two indexes it
-> needs (`idx_txe_user_ts`, `idx_txe_merchant_ts`) already exist for velocity and can
-> share the round trip. The open cost is latency against the <100ms target, to be measured
-> in Phase 4, and torch in the API image.
+> **What it is actually worth.** A strictly causal replay of all 1,723,938 transactions of
+> 2019 -- score, then insert, so nothing can see its own future -- gives **0.4667** AUC-PR,
+> against the XGBoost champion's 0.2501. P@100 is 0.710 and recall at 1% FPR is 0.932.
+> Latency lands at **p50 5.4ms / p95 13.0ms / p99 21.1ms**, comfortably inside the <100ms
+> target, so the reversal's one open cost is settled.
+>
+> **The offline number was optimistic by ~17%, not fake.** Letting the graph see the future
+> outright is worth only ~1% (0.5804 causal vs 0.5872 anti-causal on a June slice). The gap
+> is neighbour breadth: offline samples 10 neighbours spread across the card's whole period,
+> serving takes the 10 most recent, which is what `idx_txe_user_ts` cheaply returns. See
+> section 8.
 
 Originally settled in discussion: **precomputed embeddings + live velocity features.**
 
@@ -714,16 +719,35 @@ already has, so nothing needs redesigning. What differs is only the inductive bi
 > embeddings; the sequence model yields user embeddings only. The assembled feature
 > vectors differ. `store.py` must handle both shapes.
 
-### Phase 4 — Serving API
-- [ ] FastAPI: `/predict`, `/explain`, `/health`, `/metrics`
-- [ ] Embedding lookup + **cold-start fallback path**
-- [ ] Live velocity aggregates (`velocity.py`, shared with offline to avoid train/serve skew)
-- [ ] Prediction logging incl. `latency_ms` + `embedding_age_seconds`
-- [ ] Load model from MLflow registry by stage, not by path
-- **Done when:** `curl` returns a score in <100ms and the row lands in Postgres.
+### Phase 4 — Serving API — **COMPLETE (2026-09-19)**
+- [x] FastAPI: `/predict`, `/health`, `/metrics` (`/explain` deferred to Phase 7)
+- [x] Per-request subgraph + **cold-start as a normal path** (58 cold users, 29,706 cold
+      merchants across the 2019 replay -- the unseen-merchant path runs constantly)
+- [x] Live velocity aggregates (`velocity.py`, one module, two callers, skew test)
+- [x] Prediction logging incl. `latency_ms` and cold-start flags
+- [x] Model loaded from the registry **by alias** (decision 14), never by path
+- [x] `sql/003_serving.sql` widens `transaction_events` to carry every encoder input plus
+      the 13 velocity floats, written at insert time
+- [x] Causal replay, `--shards N` for parallelism, proven equal to the sequential run
+- **Done:** `curl` returns a score in **5.4ms p50**; the row lands in Postgres.
 
-> **Train/serve skew is the top risk here.** Velocity features must be computed by the same
-> code offline and online. One module, two callers.
+**The replay is the deliverable, not the API.** It found three defects that every shape
+test passed over, because each returns a confident number rather than an exception:
+
+| defect | cost | why tests missed it |
+|---|---|---|
+| every neighbour wired to both id nodes | **4.4x** | node counts and widths were all correct |
+| 168h velocity window also bounding the graph | 8% | the bound is right for velocity |
+| `ToUndirected` putting the seed in its own aggregate | 7.5% | the graph really is undirected |
+
+The first showed up as inflated scores on *legitimate* rows (0.1091 vs 0.0536 offline),
+not as missed fraud -- a precision collapse, which is exactly what a polluted neighbourhood
+aggregate produces. Tests now assert **edge attribution**, and the four edge types are
+written out explicitly rather than derived.
+
+> **Reproducing the offline sampler is what made the diagnosis conclusive.** Rebuilding
+> `NeighborLoader`'s scheme by hand scored 0.6945 against the real 0.7015 on the same
+> slice, which validated the harness before it was used to attribute blame.
 
 ### Phase 5 — Monitoring
 - [ ] `refresh_embeddings.py` — watermarked incremental job
@@ -803,7 +827,14 @@ Naming these reads stronger than letting a reviewer find them:
 4. **Single-node throughput** — no Kafka, no horizontal scale story.
 5. We **do not reproduce NVIDIA's numbers** — different framework, CPU serving, different
    feature pipeline. This is inspired by the blueprint, not a reimplementation of it.
-6. **The models are reference implementations, not original work.** The graph approach is
+6. **Serving sees a narrower neighbourhood than training did, and it costs ~10%.** The
+   offline graph samples 10 neighbours from across a card's whole period; serving takes
+   the 10 most recent, which is what `idx_txe_user_ts` returns cheaply. Measured at
+   0.5804 (10 recent) vs 0.6427 (10 spread) on a June 2019 slice. Sampling a card's full
+   history per request would close it, at the cost of a much more expensive query --
+   a fidelity/latency tradeoff we took deliberately, not a defect. It is the main reason
+   the served 0.4667 sits below the offline 0.5614.
+7. **The models are reference implementations, not original work.** The graph approach is
    ported from the blueprint and the foundation model is a pretrained NVIDIA checkpoint
    used frozen. The original contribution is the platform: the pipeline, serving
    architecture, monitoring, and the champion/challenger comparison between them. Say this

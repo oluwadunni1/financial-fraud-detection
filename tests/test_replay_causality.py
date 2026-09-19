@@ -13,9 +13,10 @@ from __future__ import annotations
 
 import datetime as dt
 
+import polars as pl
 import pytest
 
-from fraud.jobs.replay import CausalHistory
+from fraud.jobs.replay import CausalHistory, shard_boundaries
 
 D = dt.datetime
 VELOCITY = {"velocity_count_1h": 0.0, "velocity_seconds_since_last": -1.0}
@@ -86,15 +87,33 @@ def test_other_users_are_never_returned():
     assert seen.is_empty()
 
 
-def test_rows_outside_the_velocity_window_are_dropped():
-    """Beyond 168h nothing can affect a feature, and serving would not fetch it."""
+def test_old_rows_are_kept_while_the_graph_still_needs_them():
+    """The velocity window must not bound the GRAPH.
+
+    Beyond 168h a row affects no velocity feature -- `compute_velocity` rolls
+    over the window and ignores it. But the offline user node aggregates
+    transactions sampled across the whole split, so a card whose last activity
+    was a month ago must still present neighbours. Pruning these was worth
+    0.5339 -> 0.5804 AUC-PR on a June 2019 slice.
+    """
     h = history()
     h.add(txn(1, 7, D(2019, 1, 1, 10, 0)), VELOCITY)
     h.add(txn(2, 7, D(2019, 1, 5, 10, 0)), VELOCITY)
 
-    # 10 days later: the first row has aged out, the second has not.
+    # 10 days later both are outside the 168h window, and both are still here.
     seen = h.neighbourhood(txn(3, 7, D(2019, 1, 11, 10, 0))).user_history
-    assert seen["txn_id"].to_list() == [2]
+    assert seen["txn_id"].to_list() == [2, 1]
+
+
+def test_old_rows_are_dropped_once_newer_ones_replace_them():
+    """Retention is bounded: the cap is row count, not unlimited memory."""
+    h = CausalHistory(window_hours=168, merchant_cap=3)
+    h.add(txn(1, 7, D(2019, 1, 1, 10, 0)), VELOCITY)          # ancient
+    for i in range(3):
+        h.add(txn(10 + i, 7, D(2019, 6, 1, 10 + i, 0)), VELOCITY)
+
+    seen = h.neighbourhood(txn(99, 7, D(2019, 6, 2, 10, 0))).user_history
+    assert seen["txn_id"].to_list() == [12, 11, 10], "the ancient row should age out"
 
 
 def test_merchant_history_is_shared_across_users():
@@ -134,3 +153,50 @@ def test_window_boundary_is_inclusive_of_exactly_the_window(hours):
         txn(2, 7, base + dt.timedelta(hours=hours) - dt.timedelta(minutes=1))
     )
     assert just_inside.user_history.height == 1
+
+
+# --- sharding must not change what any transaction can see ---------------
+# A shard is seeded with everything before it, so the parallel replay equals
+# the sequential one. That holds only if a boundary never lands inside a group
+# of tied timestamps: seeding uses `ts < start`, so a tied row left in the
+# previous shard would be invisible to ALL of the next one rather than just to
+# its twin -- and 142,010 rows share a user and a minute.
+
+def frame_with_ties(pattern: list[int]) -> pl.DataFrame:
+    """`pattern` gives how many rows share each successive timestamp."""
+    rows, base = [], D(2019, 1, 1, 0, 0)
+    for step, count in enumerate(pattern):
+        for _ in range(count):
+            rows.append({"ts": base + dt.timedelta(minutes=step)})
+    return pl.DataFrame(rows)
+
+
+def test_boundaries_cover_every_row_exactly_once():
+    frame = frame_with_ties([1] * 40)
+    ranges = shard_boundaries(frame, 4)
+    assert ranges[0][0] == 0
+    assert ranges[-1][1] == frame.height
+    assert all(a[1] == b[0] for a, b in zip(ranges, ranges[1:], strict=False))
+
+
+def test_a_boundary_never_splits_tied_timestamps():
+    # 10 distinct timestamps, the middle one shared by 12 rows -- a boundary
+    # computed purely by row count would land inside it.
+    frame = frame_with_ties([2, 2, 2, 2, 12, 2, 2, 2, 2, 2])
+    ts = frame.get_column("ts").to_list()
+    for shards in (2, 3, 4, 5):
+        for lo, _ in shard_boundaries(frame, shards)[1:]:
+            assert ts[lo] != ts[lo - 1], (
+                f"{shards} shards: boundary at {lo} splits a tied timestamp"
+            )
+
+
+def test_single_shard_is_the_whole_frame():
+    frame = frame_with_ties([1] * 10)
+    assert shard_boundaries(frame, 1) == [(0, 10)]
+
+
+def test_all_rows_tied_collapses_to_one_shard():
+    """Nothing can be split, so asking for 4 shards must still be correct."""
+    frame = frame_with_ties([20])
+    assert shard_boundaries(frame, 4) == [(0, 20)]
