@@ -12,10 +12,12 @@ stages:
       hash: md5
       md5: 15b58a3afbc5288c8e2113506e439a84
       size: 1196
+      isexec: true
     - path: src/fraud/data/ingest.py
       hash: md5
       md5: f6ca81ef53cb04a534481764676f0b40
       size: 9532
+      isexec: true
     - path: src/fraud/data/schemas.py
       hash: md5
       md5: da96c5678d4acd600d5b30950af885aa
@@ -48,6 +50,7 @@ stages:
       hash: md5
       md5: 15b58a3afbc5288c8e2113506e439a84
       size: 1196
+      isexec: true
     - path: src/fraud/data/schemas.py
       hash: md5
       md5: da96c5678d4acd600d5b30950af885aa
@@ -57,6 +60,7 @@ stages:
       hash: md5
       md5: 735a3d6a0fed106b542d237fb61a6980
       size: 6631
+      isexec: true
     params:
       params.yaml:
         paths.processed: data/processed
@@ -70,6 +74,7 @@ stages:
       hash: md5
       md5: 082904b5703016af66042f2bc4d916b1
       size: 2297
+      isexec: true
   split:
     cmd: .venv/bin/python -m fraud.data.split
     deps:
@@ -82,10 +87,12 @@ stages:
       hash: md5
       md5: 15b58a3afbc5288c8e2113506e439a84
       size: 1196
+      isexec: true
     - path: src/fraud/data/split.py
       hash: md5
       md5: f796c5b8bd1914b9ccd2848259845e52
       size: 6355
+      isexec: true
     params:
       params.yaml:
         paths.processed: data/processed
@@ -98,6 +105,7 @@ stages:
       hash: md5
       md5: 3c649bd1cbd23f6cbdda3e04abaff160
       size: 2191
+      isexec: true
   sample:
     cmd: .venv/bin/python -m fraud.data.sample
     deps:
@@ -110,10 +118,12 @@ stages:
       hash: md5
       md5: 15b58a3afbc5288c8e2113506e439a84
       size: 1196
+      isexec: true
     - path: src/fraud/data/sample.py
       hash: md5
       md5: 0fc6d8775e86b0bc5aba66b52d9a457a
       size: 2710
+      isexec: true
     params:
       params.yaml:
         paths.processed: data/processed
@@ -126,6 +136,7 @@ stages:
       hash: md5
       md5: 53af6355b9a8285d79364e2d98c406a8
       size: 4076046
+      isexec: true
   velocity:
     cmd: .venv/bin/python -m fraud.features.build_velocity
     deps:
@@ -143,10 +154,12 @@ stages:
       hash: md5
       md5: 77b326a2a3e0838e23e15266eb217bc6
       size: 4910
+      isexec: true
     - path: src/fraud/features/velocity.py
       hash: md5
-      md5: 32634110b4f451a95ba4a086c2e8b031
-      size: 5030
+      md5: 1a420819198197fc4437dbeb4be2b7de
+      size: 6019
+      isexec: true
     params:
       params.yaml:
         paths.processed: data/processed
@@ -160,16 +173,16 @@ stages:
     outs:
     - path: data/features/velocity
       hash: md5
-      md5: 9c11275a4a7c03589a873f86ca535596.dir
-      size: 623131662
+      md5: 9c62b8c989af7374a03344c84eec55ea.dir
+      size: 623072966
       nfiles: 227
   features:
     cmd: .venv/bin/python -m fraud.features.build
     deps:
     - path: data/features/velocity
       hash: md5
-      md5: 9c11275a4a7c03589a873f86ca535596.dir
-      size: 623131662
+      md5: 9c62b8c989af7374a03344c84eec55ea.dir
+      size: 623072966
       nfiles: 227
     - path: data/processed
       hash: md5
@@ -193,8 +206,8 @@ stages:
       isexec: true
     - path: src/fraud/features/encoders.py
       hash: md5
-      md5: c01a0596521293784de2709b4680571b
-      size: 7832
+      md5: 3aa0d7fb4cdd2712243616bca43d9694
+      size: 9738
       isexec: true
     params:
       params.yaml:
@@ -229,21 +242,21 @@ stages:
     outs:
     - path: data/features/encoder.json
       hash: md5
-      md5: cd395e3803b830e8e471b402a5a1eb4a
+      md5: 8e3fa8e6bcbf28f4be11166dbc54488f
       size: 3500873
       isexec: true
     - path: data/features/matrix
       hash: md5
-      md5: 908c31ea2fb0940b185b447b1f1bd970.dir
-      size: 803821823
+      md5: f4dd8f400cac419fae6909e1f5ef8295.dir
+      size: 803720534
       nfiles: 30
   train_xgb:
     cmd: .venv/bin/python -m fraud.models.xgb
     deps:
     - path: data/features/matrix
       hash: md5
-      md5: 908c31ea2fb0940b185b447b1f1bd970.dir
-      size: 803821823
+      md5: f4dd8f400cac419fae6909e1f5ef8295.dir
+      size: 803720534
       nfiles: 30
     - path: src/fraud/config.py
       hash: md5
@@ -259,6 +272,7 @@ stages:
       hash: md5
       md5: 02370ec0c12edd13e6fd44abea330bd4
       size: 8318
+      isexec: true
     params:
       params.yaml:
         paths.feature_matrix: data/features/matrix
@@ -287,21 +301,21 @@ stages:
     outs:
     - path: data/models/xgb
       hash: md5
-      md5: e995dccc72804fd62ba6838430817df8.dir
-      size: 7080043
+      md5: 2ca32222e631e5c70411f915a1725f2e.dir
+      size: 6426073
       nfiles: 2
   evaluate:
     cmd: .venv/bin/python -m fraud.models.evaluate
     deps:
     - path: data/features/matrix
       hash: md5
-      md5: 908c31ea2fb0940b185b447b1f1bd970.dir
-      size: 803821823
+      md5: f4dd8f400cac419fae6909e1f5ef8295.dir
+      size: 803720534
       nfiles: 30
     - path: data/models/xgb
       hash: md5
-      md5: e995dccc72804fd62ba6838430817df8.dir
-      size: 7080043
+      md5: 2ca32222e631e5c70411f915a1725f2e.dir
+      size: 6426073
       nfiles: 2
     - path: src/fraud/config.py
       hash: md5
@@ -312,10 +326,12 @@ stages:
       hash: md5
       md5: ca1448f43a5531526337e4e6e531365d
       size: 5058
+      isexec: true
     - path: src/fraud/models/metrics.py
       hash: md5
       md5: 8c61219f8569b24773965b34d8cde696
       size: 4916
+      isexec: true
     params:
       params.yaml:
         evaluate:
@@ -332,24 +348,27 @@ stages:
     outs:
     - path: reports/metrics_xgb.json
       hash: md5
-      md5: 2ed44b76f6fe18f5eb2c1c372ac4fd4c
-      size: 2461
+      md5: 51524163ce6c0c7bf9a3828091357c7c
+      size: 2464
+      isexec: true
   register:
     cmd: .venv/bin/python -m fraud.models.registry
     deps:
     - path: data/features/encoder.json
       hash: md5
-      md5: cd395e3803b830e8e471b402a5a1eb4a
+      md5: 8e3fa8e6bcbf28f4be11166dbc54488f
       size: 3500873
+      isexec: true
     - path: data/models/xgb
       hash: md5
-      md5: e995dccc72804fd62ba6838430817df8.dir
-      size: 7080043
+      md5: 2ca32222e631e5c70411f915a1725f2e.dir
+      size: 6426073
       nfiles: 2
     - path: reports/metrics_xgb.json
       hash: md5
-      md5: 2ed44b76f6fe18f5eb2c1c372ac4fd4c
-      size: 2461
+      md5: 51524163ce6c0c7bf9a3828091357c7c
+      size: 2464
+      isexec: true
     - path: src/fraud/config.py
       hash: md5
       md5: 15b58a3afbc5288c8e2113506e439a84
@@ -359,6 +378,7 @@ stages:
       hash: md5
       md5: 739a543769369c23d3b63e2ce9189c57
       size: 5966
+      isexec: true
     params:
       params.yaml:
         mlflow:
@@ -373,18 +393,19 @@ stages:
       hash: md5
       md5: aa280ac765477674744861214bdf7e60
       size: 250
+      isexec: true
   build_graph:
     cmd: .venv/bin/python -m fraud.features.graph
     deps:
     - path: data/features/encoder.json
       hash: md5
-      md5: cd395e3803b830e8e471b402a5a1eb4a
+      md5: 8e3fa8e6bcbf28f4be11166dbc54488f
       size: 3500873
       isexec: true
     - path: data/features/matrix
       hash: md5
-      md5: 908c31ea2fb0940b185b447b1f1bd970.dir
-      size: 803821823
+      md5: f4dd8f400cac419fae6909e1f5ef8295.dir
+      size: 803720534
       nfiles: 30
     - path: data/processed
       hash: md5
@@ -403,13 +424,13 @@ stages:
       isexec: true
     - path: src/fraud/features/encoders.py
       hash: md5
-      md5: c01a0596521293784de2709b4680571b
-      size: 7832
+      md5: 3aa0d7fb4cdd2712243616bca43d9694
+      size: 9738
       isexec: true
     - path: src/fraud/features/graph.py
       hash: md5
-      md5: 0c45eaf08bd620693f5f972da8124129
-      size: 13400
+      md5: b6180dcc144178e95e852a0df0cbd443
+      size: 13868
       isexec: true
     params:
       params.yaml:
@@ -427,22 +448,22 @@ stages:
     outs:
     - path: data/graph
       hash: md5
-      md5: bed848867e3fecb944fa57a6bac0f36e.dir
-      size: 161595534
-      nfiles: 15
+      md5: 958be664256ef3551c9606aaadb4c61a.dir
+      size: 162747574
+      nfiles: 16
     - path: reports/graph_summary.json
       hash: md5
-      md5: 2dd5db819ef152410244a7aec60e019a
-      size: 1531
+      md5: fdfaa0bbc4954729b9e4b78bd78b6817
+      size: 1530
       isexec: true
   train_gnn:
     cmd: .venv/bin/python -m fraud.models.gnn
     deps:
     - path: data/graph
       hash: md5
-      md5: bed848867e3fecb944fa57a6bac0f36e.dir
-      size: 161595534
-      nfiles: 15
+      md5: 958be664256ef3551c9606aaadb4c61a.dir
+      size: 162747574
+      nfiles: 16
     - path: src/fraud/config.py
       hash: md5
       md5: 15b58a3afbc5288c8e2113506e439a84
@@ -480,21 +501,21 @@ stages:
     outs:
     - path: data/models/gnn
       hash: md5
-      md5: 95992c53dc634d2ca814a8cf28b22299.dir
-      size: 444087
+      md5: 5b346df949e9df3bd4a87249be015e10.dir
+      size: 443728
       nfiles: 2
   gnn_embeddings:
     cmd: .venv/bin/python -m fraud.models.gnn_embeddings
     deps:
     - path: data/graph
       hash: md5
-      md5: bed848867e3fecb944fa57a6bac0f36e.dir
-      size: 161595534
-      nfiles: 15
+      md5: 958be664256ef3551c9606aaadb4c61a.dir
+      size: 162747574
+      nfiles: 16
     - path: data/models/gnn
       hash: md5
-      md5: 95992c53dc634d2ca814a8cf28b22299.dir
-      size: 444087
+      md5: 5b346df949e9df3bd4a87249be015e10.dir
+      size: 443728
       nfiles: 2
     - path: src/fraud/config.py
       hash: md5
@@ -548,14 +569,14 @@ stages:
       nfiles: 6
     - path: data/features/matrix
       hash: md5
-      md5: 908c31ea2fb0940b185b447b1f1bd970.dir
-      size: 803821823
+      md5: f4dd8f400cac419fae6909e1f5ef8295.dir
+      size: 803720534
       nfiles: 30
     - path: data/graph
       hash: md5
-      md5: bed848867e3fecb944fa57a6bac0f36e.dir
-      size: 161595534
-      nfiles: 15
+      md5: 958be664256ef3551c9606aaadb4c61a.dir
+      size: 162747574
+      nfiles: 16
     - path: src/fraud/config.py
       hash: md5
       md5: 15b58a3afbc5288c8e2113506e439a84
