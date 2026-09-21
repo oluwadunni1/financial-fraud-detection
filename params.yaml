@@ -24,6 +24,19 @@ paths:
   metrics_gnn: reports/metrics_gnn.json
   registry_report: reports/registry.json
 
+# --- fetch_raw ------------------------------------------------------------
+# The raw CSV is a STAGE OUTPUT, not a standalone .dvc pointer. DVC never
+# collected that pointer as a stage, so `dvc push`/`dvc pull` silently skipped
+# the 2.35 GB source while handling every derived artifact. As a stage output
+# it lives in the DAG and blanket operations cover it.
+fetch:
+  # Box serves a 278 MB transactions.tgz; fetch_raw unpacks the CSV from it.
+  raw_url: "https://ibm.box.com/index.php?rm=box_download_shared_file&shared_name=mhrtz6xiknblqznoi9h4f390scoqustt&file_id=f_770766751708"
+  # txn_id is this file's row index, so a different byte stream renumbers every
+  # transaction. Verification failing must stop the pipeline, not warn.
+  expected_size: 2354626737
+  expected_md5: "5d0f027f333e8ec7d58969a7b8a206f8"
+
 ingest:
   # Row-group size for Parquet output; tuned for streaming reads during training.
   row_group_size: 1_000_000

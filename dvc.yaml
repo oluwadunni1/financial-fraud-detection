@@ -5,6 +5,21 @@
 # the data -- see reports/splits.json and src/fraud/data/split.py.
 
 stages:
+  fetch_raw:
+    desc: >-
+      Download and unpack the TabFormer CSV. A STAGE OUTPUT rather than a
+      standalone .dvc pointer: DVC never collected that pointer as a stage, so
+      push/pull silently skipped the 2.35 GB source. See params.yaml:fetch.
+    cmd: .venv/bin/python -m fraud.data.fetch
+    deps:
+      - src/fraud/config.py
+      - src/fraud/data/fetch.py
+    params:
+      - paths.raw_csv
+      - fetch
+    outs:
+      - data/TabFormer/raw/card_transaction.v1.csv
+
   ingest:
     desc: Raw TabFormer CSV -> year-partitioned Parquet, one streaming pass.
     cmd: .venv/bin/python -m fraud.data.ingest

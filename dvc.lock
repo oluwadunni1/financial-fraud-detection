@@ -630,3 +630,28 @@ stages:
       md5: 7a6ced9fb8348df5bb7791746019f04a
       size: 5102
       isexec: true
+  fetch_raw:
+    cmd: .venv/bin/python -m fraud.data.fetch
+    deps:
+    - path: src/fraud/config.py
+      hash: md5
+      md5: 15b58a3afbc5288c8e2113506e439a84
+      size: 1196
+      isexec: true
+    - path: src/fraud/data/fetch.py
+      hash: md5
+      md5: f403cfc78ec642ec68a2889c5c40b1d2
+      size: 6777
+    params:
+      params.yaml:
+        fetch:
+          raw_url: 
+            https://ibm.box.com/index.php?rm=box_download_shared_file&shared_name=mhrtz6xiknblqznoi9h4f390scoqustt&file_id=f_770766751708
+          expected_size: 2354626737
+          expected_md5: 5d0f027f333e8ec7d58969a7b8a206f8
+        paths.raw_csv: data/TabFormer/raw/card_transaction.v1.csv
+    outs:
+    - path: data/TabFormer/raw/card_transaction.v1.csv
+      hash: md5
+      md5: 5d0f027f333e8ec7d58969a7b8a206f8
+      size: 2354626737
