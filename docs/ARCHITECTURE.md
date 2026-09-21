@@ -285,7 +285,7 @@ Do not load the full graph onto the GPU. `NeighborLoader` samples subgraphs; the
 matrix stays in CPU RAM and is gathered per batch. That makes 9.6 GB of features trainable
 on a 24 GB card.
 
-### 4.3 MLflow hosting -- DagsHub. DVC remote -- none yet.
+### 4.3 MLflow hosting -- DagsHub. DVC remote -- Cloudflare R2.
 
 **MLflow lives on DagsHub.** Hosted tracking plus Model Registry, free, nothing to self-host.
 
@@ -298,20 +298,21 @@ export MLFLOW_TRACKING_PASSWORD=<dagshub-token>
 > **Confirmed (2026-09-16):** DagsHub's hosted MLflow supports the Model Registry API,
 > so champion/challenger promotion uses the real registry. No tag-based fallback needed.
 
-**DVC has no remote, and that is deliberate.** DVC is initialised with a local cache only.
-DagsHub is *not* used as the DVC remote.
+**The DVC remote is Cloudflare R2, wired 2026-09-21.**
 
-The reasoning: a remote exists to move data between machines. Right now nothing needs
-moving. The raw CSV is re-downloadable from IBM Box in about a minute; the large graph
-artifacts are explicitly regenerated on the GPU Studio rather than pushed (see 4.4); model
-artifacts and embeddings go to MLflow, not the DVC remote. That leaves a handful of small
-Parquet files that do not exist yet. Standing up remote storage now would be versioning
-infrastructure with nothing to version.
+It was deliberately absent until then. A remote exists to move data between machines, and
+through Phase 2 nothing needed moving: the raw CSV is re-downloadable from IBM Box, the
+large graph artifacts are regenerated rather than pushed, and model artifacts go to MLflow.
+Standing up remote storage earlier would have been versioning infrastructure with nothing
+to version.
 
-A remote earns its place the moment a **second machine** needs `dvc pull` -- i.e. the
-Phase 3 GPU Studio, or CI. At that point it is **Cloudflare R2**: S3-compatible, so the
-already-installed `dvc[s3]` covers it with no new dependency, 10 GB free, and no egress
-fees (the trap with S3 proper when a GPU Studio pulls the same features repeatedly).
+Both triggers named at the time have now fired -- Phase 3 ran on a separate GPU Studio, and
+Phase 6 puts `dvc repro` in GitHub Actions -- so the remote earned its place. R2 rather than
+S3 because CI is the main consumer and S3 egress to a GitHub runner is charged per GB while
+R2's is free; S3-compatible, so the already-installed `dvc[s3]` needed no new dependency.
+
+At 4.3 GB on disk the whole dataset fits inside R2's 10 GB free tier, so every output is
+pushed -- no `push: false` on the large regenerable stages.
 
 ```bash
 dvc remote add -d r2 s3://<bucket>
@@ -404,6 +405,20 @@ cardinalities (one-hot below 8, binary at or above):
 |---|---|---|---|
 | Full history | 24,386,900 | **7.32 GB** | 3.66 GB |
 | 2016+ subsample | 7,214,337 | **2.16 GB** | 1.08 GB |
+
+Those are **in-memory** figures. On disk as compressed Parquet the same matrix is 767 MB,
+and every DVC-tracked output together is **4.3 GB** -- which is what the R2 free tier is
+measured against, not the fp32 number:
+
+| | on disk |
+|---|---|
+| raw CSV | 2.2 GB |
+| feature matrix | 767 MB |
+| velocity | 595 MB |
+| processed | 538 MB |
+| graph | 156 MB |
+| models | 6.6 MB |
+| **total pushed to R2** | **4.3 GB** |
 
 *Derived: final width lands in Phase 1 once the encoder is actually fitted.*
 

@@ -1,0 +1,6 @@
+[core]
+    remote = r2
+['remote "r2"']
+    url = s3://fraud-detection-tabformer/dvcstore
+    endpointurl = https://827fd3217d86da2fdda31d997f23f66c.r2.cloudflarestorage.com
+    region = auto

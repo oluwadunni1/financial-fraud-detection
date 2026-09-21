@@ -98,12 +98,24 @@ These were settled deliberately. Reopen only if new evidence appears.
    Actions scheduled workflows plus a cron container cover it. Adding a scheduler +
    webserver + metadata DB is the classic overengineering trap. Prefect Cloud free tier
    if an orchestration UI is genuinely wanted.
-10. **DagsHub hosts MLflow only -- it is not the DVC remote.** DVC runs with a local cache
-   and **no remote at all** for now: the raw CSV is re-downloadable, the big graph
-   artifacts are regenerated rather than pushed, and model artifacts go to MLflow. A
-   remote earns its place when a second machine needs `dvc pull` (the Phase 3 GPU Studio,
-   or CI), and at that point it is **Cloudflare R2** -- S3-compatible so `dvc[s3]` already
-   covers it, no egress fees. Commands are in ARCHITECTURE.md section 4.3.
+10. **DagsHub hosts MLflow only. The DVC remote is Cloudflare R2 -- and it now exists.**
+   DVC ran with a local cache and no remote through Phase 4, deliberately: a remote moves
+   data between machines and nothing needed moving. Both triggers named at the time have
+   since fired -- Phase 3 ran on a separate GPU Studio, and Phase 6 puts `dvc repro` in
+   GitHub Actions -- so R2 was wired on 2026-09-21 and 321 files pushed.
+   R2 over S3 because CI is the main consumer: S3 egress to a GitHub runner is charged per
+   GB, R2's is free. S3-compatible, so the already-installed `dvc[s3]` covers it.
+   **The whole dataset is 4.3 GB on disk against R2's 10 GB free tier**, so everything is
+   pushed and nothing needs `push: false`. (The 7.32 GB in ARCHITECTURE 4.4 is the matrix
+   in fp32 memory; as compressed Parquet it is 767 MB.)
+   Bucket and endpoint live in `.dvc/config`, committed. The key pair lives in
+   `.dvc/config.local`, gitignored by `.dvc/.gitignore` and never committed. CI has no
+   config.local, so the same secrets go in GitHub Actions secrets exported as
+   `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY`, which s3fs picks up for any
+   S3-compatible endpoint.
+   **Do not `source .env` in zsh.** Placeholder values containing `<...>` parse as input
+   redirections; that silently emptied `$R2_BUCKET` and produced a malformed remote whose
+   error message pointed at `endpointurl` instead. Read it with `dotenv` instead.
 11. **The 2016+ GNN subsample stays, but the storage justification is dead.** The feature
    matrix measures 7.32 GB fp32, not the estimated 9.6 GB, and there is no DagsHub ceiling
    to hit any more. Justify the subsample on modelling grounds only.
