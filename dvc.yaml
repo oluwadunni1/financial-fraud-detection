@@ -181,6 +181,27 @@ stages:
       - reports/registry.json:
           cache: false
 
+  fm_sequences:
+    desc: >-
+      Transactions -> the token streams the foundation model was pretrained on.
+      4096-token windows (the TRAINED length; config.json allows 8192 but
+      pretraining ran at 4096), per (User, Card), overlapping so no transaction
+      is scored with an empty context.
+    cmd: .venv/bin/python -m fraud.features.fm_sequences
+    deps:
+      - data/processed
+      - src/fraud/config.py
+      - src/fraud/features/fm_tokenizer.py
+      - src/fraud/features/fm_sequences.py
+    params:
+      - paths.processed
+      - paths.fm_sequences
+      - fm
+    outs:
+      - data/features/fm_sequences
+      - reports/fm_sequences.json:
+          cache: false
+
   build_graph:
     desc: >
       Tri-partite User->Transaction->Merchant graph, ported from the NVIDIA

@@ -1,0 +1,10 @@
+{
+  "transactions": 7214337,
+  "sequences": 44627,
+  "seq_length": 4096,
+  "transactions_per_window": 315,
+  "tokens_total": 174304674,
+  "tokens_max": 4096,
+  "cards": 5448,
+  "seconds": 96.1
+}

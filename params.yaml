@@ -22,7 +22,24 @@ paths:
   embeddings: data/features/embeddings
   embeddings_summary: reports/embeddings_summary.json
   metrics_gnn: reports/metrics_gnn.json
+  fm_sequences: data/features/fm_sequences
+  fm_sequences_summary: reports/fm_sequences.json
+  fm_embeddings: data/features/fm_embeddings
+  fm_metrics: reports/metrics_fm.json
   registry_report: reports/registry.json
+
+# --- foundation model (Phase 3.5) ----------------------------------------
+# Upstream: github.com/oluwadunni1/transaction-foundation-model
+fm:
+  # 2016+ matches the GNN subsample (decision 11) so the three models are
+  # compared on the same footing.
+  min_year: 2016
+  # config.json allows 8192 positions, but pretraining ran at 4096
+  # (configs/pretrain_financial_decoder.yaml). Extracting at the trained
+  # length keeps us out of RoPE extrapolation.
+  seq_length: 4096
+  batch_size: 16
+  dtype: float16
 
 # --- fetch_raw ------------------------------------------------------------
 # The raw CSV is a STAGE OUTPUT, not a standalone .dvc pointer. DVC never

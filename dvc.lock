@@ -655,3 +655,43 @@ stages:
       hash: md5
       md5: 5d0f027f333e8ec7d58969a7b8a206f8
       size: 2354626737
+  fm_sequences:
+    cmd: .venv/bin/python -m fraud.features.fm_sequences
+    deps:
+    - path: data/processed
+      hash: md5
+      md5: 3967e7aa9b864da7a3802222d282d56c.dir
+      size: 563670306
+      nfiles: 30
+    - path: src/fraud/config.py
+      hash: md5
+      md5: 15b58a3afbc5288c8e2113506e439a84
+      size: 1196
+      isexec: true
+    - path: src/fraud/features/fm_sequences.py
+      hash: md5
+      md5: 67a462b3adee8b6c74d077d47a5fb3b5
+      size: 7678
+    - path: src/fraud/features/fm_tokenizer.py
+      hash: md5
+      md5: ede01532462bca80d1af234e290cf5c4
+      size: 10031
+    params:
+      params.yaml:
+        fm:
+          min_year: 2016
+          seq_length: 4096
+          batch_size: 16
+          dtype: float16
+        paths.fm_sequences: data/features/fm_sequences
+        paths.processed: data/processed
+    outs:
+    - path: data/features/fm_sequences
+      hash: md5
+      md5: 1960f03f4c273a55908d1c040969516f.dir
+      size: 47588502
+      nfiles: 2
+    - path: reports/fm_sequences.json
+      hash: md5
+      md5: b7514c13ecb505415717e233af7ff576
+      size: 194

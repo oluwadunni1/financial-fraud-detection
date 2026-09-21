@@ -18,6 +18,8 @@ dependencies = [
     "pydantic-settings>=2.4",
     "python-dotenv>=1.0",
     "pyyaml>=6.0",
+    # Reproduces cuDF's hash_values() for the foundation model's MERCH token.
+    "mmh3>=4.1",
 ]
 
 [project.optional-dependencies]
