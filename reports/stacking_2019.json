@@ -1,0 +1,63 @@
+{
+  "selection": {
+    "stack (logits)": 0.7077869734600772,
+    "stack (logits+interaction)": 0.6699970296264638,
+    "stack (ranks)": 0.6710221955286513,
+    "rank average (no fit)": 0.6804442163174278
+  },
+  "chosen": "stack (logits)",
+  "meta_coefficients": {
+    "coef": [
+      0.9062751569869048,
+      1.4954188385392848
+    ],
+    "intercept": 5.892450418315846
+  },
+  "threshold_from_2018": 0.7807288890263637,
+  "results_2019": {
+    "XGBoost alone": {
+      "auc_pr": 0.25012668376265973,
+      "p100": 0.41,
+      "p1000": 0.357,
+      "confusion": {
+        "tp": 1915,
+        "fp": 17180,
+        "fn": 172,
+        "tn": 1704671
+      },
+      "recall": 0.9175850503114519,
+      "precision": 0.10028803351662739,
+      "threshold": 0.03720792755484581
+    },
+    "GraphSAGE alone": {
+      "auc_pr": 0.4666552936322424,
+      "p100": 0.71,
+      "p1000": 0.649,
+      "confusion": {
+        "tp": 1945,
+        "fp": 17112,
+        "fn": 142,
+        "tn": 1704739
+      },
+      "recall": 0.9319597508385242,
+      "precision": 0.10206223434958284,
+      "threshold": 0.7107857465744019
+    },
+    "STACKED (fit on 2018)": {
+      "auc_pr": 0.46145250761305107,
+      "p100": 0.73,
+      "p1000": 0.599,
+      "confusion": {
+        "tp": 2018,
+        "fp": 16703,
+        "fn": 69,
+        "tn": 1705148
+      },
+      "recall": 0.9669381887877336,
+      "precision": 0.10779338710538967,
+      "threshold": 0.7807288890263637
+    }
+  },
+  "note": "The combiner is fitted on 2018 and frozen; 2019 is untouched until the final apply. Contrast the 0.5290 weighted blend, whose weight was fitted on 2019 itself.",
+  "caveat": "Both base models early-stopped on 2018, so their scores there are optimistic. This is not a clean out-of-fold set."
+}

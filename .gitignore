@@ -39,3 +39,8 @@ data/models/
 mlruns/
 .dvc/cache
 .dvc/tmp
+
+# Per-row score arrays from the replay and the batch scorers. Regenerable
+# (`fraud.jobs.replay --shards 4`, ~53 min) and 30+ MB a pair, which does not
+# belong in git. The JSON summaries beside them ARE tracked.
+reports/*.npz

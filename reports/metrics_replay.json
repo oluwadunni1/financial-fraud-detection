@@ -6,14 +6,14 @@
   "model_version": "gnn-local-epoch19",
   "seeded_rows": -1,
   "rows": 1723938,
-  "seconds": 3153.5,
-  "throughput_per_s": 546.7,
+  "seconds": 3127.8,
+  "throughput_per_s": 551.2,
   "cold_start_user": 58,
   "cold_start_merchant": 29706,
   "latency_ms": {
-    "p50": 5.397119002736872,
-    "p95": 13.045026148756731,
-    "p99": 21.139138231956153
+    "p50": 5.330678999598604,
+    "p95": 12.942717452824581,
+    "p99": 21.487868935655566
   },
   "metrics": {
     "rows": 1723938,

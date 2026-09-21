@@ -133,6 +133,9 @@ def replay_in_process(
         )
     scores = np.zeros(matrix_rows.height, dtype=np.float64)
     labels = np.zeros(matrix_rows.height, dtype=np.int8)
+    # Keyed so a replay can be joined against any other model's scores later.
+    # Without this, answering "what would an ensemble do?" costs a whole re-run.
+    txn_ids = np.zeros(matrix_rows.height, dtype=np.int64)
     latencies = np.zeros(matrix_rows.height, dtype=np.float64)
     cold_user = cold_merchant = 0
 
@@ -156,6 +159,7 @@ def replay_in_process(
 
         scores[index] = prediction.score
         labels[index] = int(row["Fraud"])
+        txn_ids[index] = int(transaction["txn_id"])
         latencies[index] = prediction.latency_ms
         cold_user += prediction.cold_start_user
         cold_merchant += prediction.cold_start_merchant
@@ -176,6 +180,7 @@ def replay_in_process(
         "positives": int(labels.sum()),
         "scores": scores,
         "labels": labels,
+        "txn_ids": txn_ids,
         "latency_ms": latencies,
         "cold_start_user": int(cold_user),
         "cold_start_merchant": int(cold_merchant),
@@ -354,6 +359,7 @@ def replay_sharded(
         "positives": sum(p["positives"] for p in parts),
         "scores": np.concatenate([p["scores"] for p in parts]),
         "labels": np.concatenate([p["labels"] for p in parts]),
+        "txn_ids": np.concatenate([p["txn_ids"] for p in parts]),
         "latency_ms": np.concatenate([p["latency_ms"] for p in parts]),
         "cold_start_user": sum(p["cold_start_user"] for p in parts),
         "cold_start_merchant": sum(p["cold_start_merchant"] for p in parts),
@@ -432,6 +438,19 @@ def main(argv: list[str] | None = None) -> int:
     out = repo_path(args.output)
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps(report, indent=2, default=float))
+
+    # Per-row scores, keyed by txn_id. A 53-minute replay should be answerable
+    # more than once: ensembles, PR curves and threshold choices all need the
+    # raw scores, and none of them justify re-running the whole thing.
+    scores_path = out.with_suffix(".npz")
+    np.savez_compressed(
+        scores_path,
+        txn_id=result["txn_ids"],
+        score=result["scores"],
+        label=result["labels"],
+        latency_ms=result["latency_ms"],
+    )
+    print(f"-> {scores_path}")
 
     print(f"\n=== causal replay, {args.years} ===")
     print(f"  AUC-PR          {metrics['auc_pr']:.4f}   (base {metrics['base_rate']:.5f})")
