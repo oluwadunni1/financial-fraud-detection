@@ -181,6 +181,21 @@ stages:
       - reports/registry.json:
           cache: false
 
+  fetch_fm_checkpoint:
+    desc: >-
+      The pretrained decoder (58 MB), pulled from upstream's Git LFS storage
+      via media.githubusercontent.com -- the raw host returns a 133-byte
+      pointer that looks like a valid file. Verified by sha256.
+    cmd: .venv/bin/python -m fraud.models.fm_checkpoint
+    deps:
+      - src/fraud/config.py
+      - src/fraud/models/fm_checkpoint.py
+    params:
+      - paths.fm_checkpoint
+      - fm.checkpoint
+    outs:
+      - data/models/fm
+
   fm_sequences:
     desc: >-
       Transactions -> the token streams the foundation model was pretrained on.
@@ -196,10 +211,39 @@ stages:
     params:
       - paths.processed
       - paths.fm_sequences
-      - fm
+      - fm.min_year
+      - fm.seq_length
     outs:
       - data/features/fm_sequences
       - reports/fm_sequences.json:
+          cache: false
+
+  fm_embeddings:
+    desc: >-
+      GPU ONLY. One causal forward pass per sequence; the hidden state at each
+      transaction's last token becomes its embedding, so it has seen that
+      transaction's past and nothing after. ~44.6k sequences: minutes on a T4,
+      ~42 hours on CPU -- do not run this without a GPU.
+    cmd: .venv/bin/python -m fraud.models.fm_embed
+    deps:
+      - data/features/fm_sequences
+      - data/models/fm
+      - src/fraud/config.py
+      - src/fraud/features/fm_tokenizer.py
+      - src/fraud/models/fm_embed.py
+    params:
+      - paths.fm_sequences
+      - paths.fm_embeddings
+      - paths.fm_checkpoint
+      - fm.batch_size
+      - fm.dtype
+    outs:
+      # ~7.2 GB float16. Regenerable from the checkpoint plus the sequences,
+      # and R2's free tier has ~5.4 GB left, so this one is deliberately not
+      # pushed -- regeneration is cheaper than the storage.
+      - data/features/fm_embeddings:
+          push: false
+      - reports/fm_embeddings.json:
           cache: false
 
   build_graph:

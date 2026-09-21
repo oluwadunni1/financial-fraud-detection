@@ -678,11 +678,8 @@ stages:
       size: 10031
     params:
       params.yaml:
-        fm:
-          min_year: 2016
-          seq_length: 4096
-          batch_size: 16
-          dtype: float16
+        fm.min_year: 2016
+        fm.seq_length: 4096
         paths.fm_sequences: data/features/fm_sequences
         paths.processed: data/processed
     outs:
@@ -693,5 +690,30 @@ stages:
       nfiles: 2
     - path: reports/fm_sequences.json
       hash: md5
-      md5: b7514c13ecb505415717e233af7ff576
+      md5: d0a221c703ba4c51e7745311cf24266d
       size: 194
+  fetch_fm_checkpoint:
+    cmd: .venv/bin/python -m fraud.models.fm_checkpoint
+    deps:
+    - path: src/fraud/config.py
+      hash: md5
+      md5: 15b58a3afbc5288c8e2113506e439a84
+      size: 1196
+      isexec: true
+    - path: src/fraud/models/fm_checkpoint.py
+      hash: md5
+      md5: 541618770b59c702bae98369979cf164
+      size: 4195
+    params:
+      params.yaml:
+        fm.checkpoint:
+          repo: oluwadunni1/transaction-foundation-model
+          ref: main
+          path: models/decoder-foundation-model
+        paths.fm_checkpoint: data/models/fm
+    outs:
+    - path: data/models/fm
+      hash: md5
+      md5: b2ac023c83d7009a197c5dbeeadba23c.dir
+      size: 57923970
+      nfiles: 4

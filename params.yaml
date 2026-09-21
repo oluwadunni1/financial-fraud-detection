@@ -25,6 +25,8 @@ paths:
   fm_sequences: data/features/fm_sequences
   fm_sequences_summary: reports/fm_sequences.json
   fm_embeddings: data/features/fm_embeddings
+  fm_embeddings_summary: reports/fm_embeddings.json
+  fm_checkpoint: data/models/fm
   fm_metrics: reports/metrics_fm.json
   registry_report: reports/registry.json
 
@@ -40,6 +42,13 @@ fm:
   seq_length: 4096
   batch_size: 16
   dtype: float16
+  # Pulled into our own pipeline rather than depending on `git lfs` at run
+  # time. GitHub serves LFS content from media.githubusercontent.com; the raw
+  # host returns a 133-byte pointer that looks like a valid file.
+  checkpoint:
+    repo: oluwadunni1/transaction-foundation-model
+    ref: main
+    path: models/decoder-foundation-model
 
 # --- fetch_raw ------------------------------------------------------------
 # The raw CSV is a STAGE OUTPUT, not a standalone .dvc pointer. DVC never
