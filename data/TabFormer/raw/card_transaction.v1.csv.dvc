@@ -3,3 +3,4 @@ outs:
   size: 2354626737
   hash: md5
   path: card_transaction.v1.csv
+  isexec: true
