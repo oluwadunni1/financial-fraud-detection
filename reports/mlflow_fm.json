@@ -1,0 +1,12 @@
+{
+  "parent_run_id": "c95d4271bbcd47738e789b621a830911",
+  "child_runs": {
+    "base": "c1cf71a9e3a14e3280c792b0589600b7",
+    "isolated_embeddings_only": "a14bfb18bb4e43d2abe3a8763e6961d1",
+    "isolated_combined": "fc2bba109ba24f089f7bde4d6b895e6c",
+    "contextual_embeddings_only": "49a508e16f194048a37d9accf8adff31",
+    "contextual_combined": "51b7bb03502946fabdf6e66cbb676be3"
+  },
+  "registered": false,
+  "verdict": "NVIDIA's isolated extraction adds +23% over a same-rows base; the in-sequence (contextual) extraction carries ~0% per-transaction variance within a card and scores at chance alone. Not registered: best head 0.2215 is below champion 0.2501 and GraphSAGE served 0.4667."
+}

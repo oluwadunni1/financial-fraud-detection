@@ -246,6 +246,67 @@ stages:
       - reports/fm_embeddings.json:
           cache: false
 
+  fm_embeddings_isolated:
+    desc: >-
+      GPU. NVIDIA's own downstream embedding, replicated: each transaction
+      encoded ALONE as <bos> T <eos>, pooled at <eos> (upstream notebook 04).
+      The control arm for fm_embeddings -- same checkpoint, same token ids --
+      so the difference between them is what sequence context is worth.
+    cmd: .venv/bin/python -m fraud.models.fm_embed_isolated
+    deps:
+      - data/features/fm_sequences
+      - data/models/fm
+      - src/fraud/config.py
+      - src/fraud/features/fm_tokenizer.py
+      - src/fraud/models/fm_embed.py
+      - src/fraud/models/fm_embed_isolated.py
+    params:
+      - paths.fm_sequences
+      - paths.fm_embeddings_isolated
+      - paths.fm_checkpoint
+      - fm.isolated_batch_size
+      - fm.dtype
+    outs:
+      # ~7.4 GB float16, regenerable in minutes -- not pushed, as fm_embeddings.
+      - data/features/fm_embeddings_isolated:
+          push: false
+      - reports/fm_embeddings_isolated.json:
+          cache: false
+
+  fm_head:
+    desc: >-
+      Upstream notebook 05's head (PCA 512 -> 64; XGBoost on base /
+      embeddings-only / combined) for BOTH embedding arms, on our evaluation:
+      real distribution, scale_pos_weight swept, threshold on val, 2019
+      headline. Answers what the foundation model adds, and what sequence
+      context adds over NVIDIA's transaction-alone embedding.
+    cmd: .venv/bin/python -m fraud.models.fm_head
+    deps:
+      - data/features/matrix
+      - data/features/fm_embeddings
+      - data/features/fm_embeddings_isolated
+      - src/fraud/config.py
+      - src/fraud/data/split.py
+      - src/fraud/models/evaluate_gnn.py
+      - src/fraud/models/fm_head.py
+      - src/fraud/models/metrics.py
+    params:
+      - paths.feature_matrix
+      - paths.fm_embeddings
+      - paths.fm_embeddings_isolated
+      - paths.fm_head
+      - paths.fm_metrics
+      - fm.min_year
+      - fm.head
+      - xgboost
+      - evaluate
+      - split
+    outs:
+      - data/models/fm_head
+    metrics:
+      - reports/metrics_fm.json:
+          cache: false
+
   build_graph:
     desc: >
       Tri-partite User->Transaction->Merchant graph, ported from the NVIDIA

@@ -60,7 +60,8 @@ def load_model(path: pathlib.Path, device: str, dtype: str = "float32"):
     return model.to(device).eval()
 
 
-def _pad_batch(rows: list[list[int]], device: str) -> tuple[torch.Tensor, torch.Tensor]:
+def _pad_batch(rows, device: str) -> tuple[torch.Tensor, torch.Tensor]:
+    """Right-pad token rows (lists or 1-D arrays) into (ids, mask) tensors."""
     width = max(len(r) for r in rows)
     ids = np.full((len(rows), width), PAD_ID, dtype=np.int64)
     mask = np.zeros((len(rows), width), dtype=np.int64)
@@ -73,16 +74,34 @@ def _pad_batch(rows: list[list[int]], device: str) -> tuple[torch.Tensor, torch.
     )
 
 
-@torch.no_grad()
-def embed_sequences(
+def flat_tokens(sequences: pl.DataFrame) -> tuple[np.ndarray, np.ndarray]:
+    """(flat token array, offsets) for the `tokens` list column.
+
+    `.to_list()` on 174M tokens materialises ~6 GB of Python ints, and the
+    Studio has 15 GB. One flat int16 array plus offsets is ~350 MB, and a
+    sequence is a zero-copy slice of it.
+    """
+    col = sequences.get_column("tokens")
+    lengths = col.list.len().to_numpy().astype(np.int64)
+    offsets = np.zeros(len(lengths) + 1, dtype=np.int64)
+    np.cumsum(lengths, out=offsets[1:])
+    return col.explode(empty_as_null=True).to_numpy(), offsets
+
+
+def iter_embeddings(
     model,
     sequences: pl.DataFrame,
     index: pl.DataFrame,
     batch_size: int,
     device: str,
     progress_every: int = 200,
-) -> tuple[np.ndarray, np.ndarray]:
-    """(txn_id, embedding) for every transaction the index points at."""
+):
+    """Yield (txn_ids, float16 embeddings) one batch of sequences at a time.
+
+    A generator so the caller decides where rows go: the stage writes them
+    straight into a memmap, because 7.2M x 512 float16 is 7.4 GB and holding
+    it plus a sorted copy would not fit in memory.
+    """
     wanted = (
         index.group_by("sequence_id")
         .agg(pl.col("txn_id"), pl.col("position"))
@@ -94,15 +113,14 @@ def embed_sequences(
     }
 
     seq_ids = sequences.get_column("sequence_id").to_list()
-    tokens = sequences.get_column("tokens").to_list()
-
-    txn_out: list[np.ndarray] = []
-    emb_out: list[np.ndarray] = []
+    flat, offsets = flat_tokens(sequences)
+    n = len(seq_ids)
     started = time.perf_counter()
 
-    for start in range(0, len(tokens), batch_size):
-        chunk_ids = seq_ids[start : start + batch_size]
-        chunk = tokens[start : start + batch_size]
+    for start in range(0, n, batch_size):
+        stop = min(start + batch_size, n)
+        chunk_ids = seq_ids[start:stop]
+        chunk = [flat[offsets[i] : offsets[i + 1]] for i in range(start, stop)]
         ids, mask = _pad_batch(chunk, device)
         hidden = model(input_ids=ids, attention_mask=mask).last_hidden_state
 
@@ -116,27 +134,102 @@ def embed_sequences(
             rows_idx.extend([b] * len(positions))
             pos_idx.extend(positions)
             txns.extend(t_ids)
-        if not txns:
-            continue
-
-        picked = hidden[
-            torch.tensor(rows_idx, device=device),
-            torch.tensor(pos_idx, device=device),
-        ]
-        emb_out.append(picked.to(torch.float32).cpu().numpy().astype(np.float16))
-        txn_out.append(np.asarray(txns, dtype=np.int64))
+        if txns:
+            picked = hidden[
+                torch.tensor(rows_idx, device=device),
+                torch.tensor(pos_idx, device=device),
+            ]
+            yield (
+                np.asarray(txns, dtype=np.int64),
+                picked.to(torch.float16).cpu().numpy(),
+            )
 
         done = start // batch_size + 1
         if progress_every and done % progress_every == 0:
-            rate = (start + len(chunk)) / (time.perf_counter() - started)
-            remaining = (len(tokens) - start - len(chunk)) / max(rate, 1e-9)
+            rate = stop / (time.perf_counter() - started)
+            remaining = (n - stop) / max(rate, 1e-9)
             print(
-                f"  {start + len(chunk):>7,} / {len(tokens):,} sequences "
+                f"  {stop:>7,} / {n:,} sequences "
                 f"({rate:,.1f}/s, {remaining / 60:.1f} min left)",
                 flush=True,
             )
 
-    return np.concatenate(txn_out), np.concatenate(emb_out)
+
+@torch.no_grad()
+def embed_sequences(
+    model,
+    sequences: pl.DataFrame,
+    index: pl.DataFrame,
+    batch_size: int,
+    device: str,
+    progress_every: int = 200,
+) -> tuple[np.ndarray, np.ndarray]:
+    """(txn_id, embedding) for every transaction the index points at.
+
+    In-memory convenience for tests and small slices; the stage streams.
+    """
+    parts = list(
+        iter_embeddings(model, sequences, index, batch_size, device, progress_every)
+    )
+    if not parts:
+        return np.empty(0, np.int64), np.empty((0, 0), np.float16)
+    return (
+        np.concatenate([t for t, _ in parts]),
+        np.concatenate([e for _, e in parts]),
+    )
+
+
+def write_embeddings(
+    batches, txn_ids_sorted: np.ndarray, dim: int, out_dir: pathlib.Path
+) -> int:
+    """Stream (txn_ids, embeddings) batches into `embeddings.npy`, row-aligned
+    with the sorted `txn_ids.npy` -- so no sort of the 7.4 GB array is needed.
+
+    Returns how many rows were written; each txn must land exactly once.
+    """
+    out_dir.mkdir(parents=True, exist_ok=True)
+    np.save(out_dir / "txn_ids.npy", txn_ids_sorted)
+    out = np.lib.format.open_memmap(
+        out_dir / "embeddings.npy", mode="w+", dtype=np.float16,
+        shape=(len(txn_ids_sorted), dim),
+    )
+    seen = np.zeros(len(txn_ids_sorted), dtype=bool)
+    written = 0
+    for txns, emb in batches:
+        rows = np.searchsorted(txn_ids_sorted, txns)
+        if (rows >= len(txn_ids_sorted)).any() or (
+            txn_ids_sorted[np.minimum(rows, len(txn_ids_sorted) - 1)] != txns
+        ).any():
+            raise RuntimeError("embedded a transaction the index does not list")
+        if seen[rows].any():
+            raise RuntimeError("a transaction was embedded more than once")
+        seen[rows] = True
+        out[rows] = emb
+        written += len(rows)
+    out.flush()
+    if not seen.all():
+        raise RuntimeError(
+            f"embedded {int(seen.sum()):,} transactions but the index asked "
+            f"for {len(seen):,}. A sequence was skipped."
+        )
+    return written
+
+
+def summarise(out_dir: pathlib.Path) -> dict:
+    """Shape and finiteness of a written embedding store, checked in chunks."""
+    emb = np.load(out_dir / "embeddings.npy", mmap_mode="r")
+    any_nan = False
+    for start in range(0, len(emb), 1_000_000):
+        if not np.isfinite(emb[start : start + 1_000_000]).all():
+            any_nan = True
+            break
+    return {
+        "transactions": int(emb.shape[0]),
+        "dim": int(emb.shape[1]),
+        "stored_dtype": str(emb.dtype),
+        "megabytes": round(emb.nbytes / 1e6, 1),
+        "any_nan": any_nan,
+    }
 
 
 def build(
@@ -157,33 +250,24 @@ def build(
         index = index.filter(pl.col("sequence_id").is_in(list(keep)))
 
     model = load_model(model_path, device, dtype)
-    txn_ids, embeddings = embed_sequences(
-        model, sequences, index, batch_size, device
-    )
-
-    if len(txn_ids) != index.height:
-        raise RuntimeError(
-            f"embedded {len(txn_ids):,} transactions but the index asked for "
-            f"{index.height:,}. A sequence was skipped."
-        )
-    if len(set(txn_ids.tolist())) != len(txn_ids):
-        raise RuntimeError("a transaction was embedded more than once")
+    txn_ids = np.sort(index.get_column("txn_id").to_numpy().astype(np.int64))
+    if len(np.unique(txn_ids)) != len(txn_ids):
+        raise RuntimeError("a transaction appears more than once in the index")
 
     # .npy, not parquet: polars has no Float16, so a list column would store
     # float32 and double this artifact to 14.8 GB. Raw .npy keeps float16 at
     # 7.4 GB and memmaps, which is what the downstream head wants anyway --
     # it needs a dense 2-D array, not 512 list cells per row.
-    order = np.argsort(txn_ids)
-    out_dir.mkdir(parents=True, exist_ok=True)
-    np.save(out_dir / "txn_ids.npy", txn_ids[order])
-    np.save(out_dir / "embeddings.npy", embeddings[order])
+    with torch.no_grad():
+        write_embeddings(
+            iter_embeddings(model, sequences, index, batch_size, device),
+            txn_ids, model.config.hidden_size, out_dir,
+        )
 
     return {
-        "transactions": int(len(txn_ids)),
+        **summarise(out_dir),
         "sequences": int(sequences.height),
-        "dim": int(embeddings.shape[1]),
-        "stored_dtype": str(embeddings.dtype),
-        "megabytes": round(embeddings.nbytes / 1e6, 1),
+        "pooling": "last field token (CUST) of each transaction, in sequence",
         "device": device,
         "dtype": dtype,
         "batch_size": batch_size,

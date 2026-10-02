@@ -108,7 +108,11 @@ def assemble(
 def fit_head(
     x_train, y_train, x_val, y_val, cfg: dict, names: list[str]
 ) -> tuple[xgb.Booster, dict]:
-    """XGBoost head, with scale_pos_weight swept on val (decision 15)."""
+    """XGBoost head, with scale_pos_weight swept on val (decision 15).
+
+    `cfg["device"]` is optional -- absent means XGBoost's own default (CPU).
+    """
+    device = cfg.get("device", "cpu")
     dtrain = xgb.QuantileDMatrix(x_train, label=y_train, feature_names=names)
     dval = xgb.QuantileDMatrix(x_val, label=y_val, feature_names=names, ref=dtrain)
 
@@ -118,6 +122,7 @@ def fit_head(
             {
                 "objective": "binary:logistic",
                 "tree_method": "hist",
+                "device": device,
                 "max_depth": cfg["max_depth"],
                 "learning_rate": cfg["learning_rate"],
                 "subsample": cfg["subsample"],

@@ -42,6 +42,11 @@ phases; section 10 is the Lightning AI setup.
 
 ## Current state (update as phases complete)
 
+**Phase 3.5 complete (2026-10-01).** The foundation model is measured and logged to MLflow
+but **not registered**: NVIDIA's own extraction (each transaction alone) adds +23% over a
+same-rows base (0.1797 -> **0.2215**), still below the champion and half of GraphSAGE. Our
+in-sequence extraction scores at chance -- see decision 21.
+
 **Phase 4 complete (2026-09-19).** The causal replay settled the question Phase 3 could
 not: GraphSAGE served honestly scores **0.4667** AUC-PR on 2019 against the offline
 **0.5614** and the XGBoost champion's **0.2501**. The offline number was ~17% optimistic,
@@ -61,7 +66,8 @@ subgraph, p50 5.4ms / p95 13.0ms, well inside the <100ms target.
 | Champion | **Registered** -- `models:/fraud-champion@champion`, AUC-PR 0.3190 |
 | Serving | **Done** -- FastAPI `/predict`, per-request subgraph, p50 5.4ms / p95 13.0ms |
 | Causal replay | **Done** -- 1,723,938 rows of 2019, AUC-PR **0.4667**, P@100 0.710 |
-| Tests | **189 passing** across 11 files |
+| Foundation model | **Measured, not registered** -- best head 0.2215, MLflow run `fm-phase3.5-experiment` |
+| Tests | **260 passing** across 15 files |
 
 Measured dataset facts now live in `docs/ARCHITECTURE.md` section 2.1. Read that before
 writing any feature code -- several of them contradict what the scaffolding assumed.
@@ -157,6 +163,16 @@ These were settled deliberately. Reopen only if new evidence appears.
 20. **Pin torch to one thread for per-request scoring.** On ~21-node graphs
    `threads=4` measured **10 rows/s** against `threads=1` at **178** -- torch thrashes on
    work far too small to parallelise, and it starves the shards of cores.
+21. **The foundation model's downstream embedding follows NVIDIA: each transaction ALONE.**
+   The checkpoint and tokenizer are NVIDIA's exactly (fork is 0 ahead / 0 behind, merchant
+   hash verified against cuDF on all 100,343 merchants). Their notebook 04 embeds a
+   transaction as `<bos> T <eos>` with no history; we also tried embedding it inside its
+   card's 315-transaction window. That **contextual** arm fails: within a card ~0% of the
+   embedding variance changes per transaction (vs 66% isolated) -- it is a card identifier,
+   scores 0.0016 alone and drags the base from 0.1797 to 0.1368. Isolated + base is 0.2215.
+   Both arms are kept (`fm_embeddings`, `fm_embeddings_isolated`) so the comparison is
+   reproducible. Never move the contextual read point to `<eos>`/`<sep>` after the
+   transaction: which one appears depends on whether a later transaction exists.
 
 ## Conventions
 
@@ -177,8 +193,8 @@ These were settled deliberately. Reopen only if new evidence appears.
 - **`model_version` must match the serving head.** v1 embeddings are meaningless to a v2
   model. They version and deploy together — this is also what makes model swapping safe.
 - **The two embedding sources have different shapes.** GNN gives 64-d user *and* merchant
-  embeddings; the foundation model gives 512-d user embeddings only. Separate tables
-  (pgvector dims are fixed per column) and different assembled feature vectors.
+  embeddings; the foundation model gives a 512-d embedding *per transaction* (PCA'd to 64
+  by the head, PCA fitted on train and shipped with it). Different assembled feature vectors.
 - **A per-request subgraph can be the right shape and still be wrong.** Three defects
   got through shape tests because every one of them returns a confident number rather
   than an exception. Each was worth more than the model:
@@ -258,9 +274,8 @@ These were settled deliberately. Reopen only if new evidence appears.
 ## Unresolved
 
 - Deploy target (Cloud Run recommended). Build Compose-first until Phase 6.
-- Is the foundation-model checkpoint loadable as standard Llama in plain `transformers`?
-  If yes, skip the NeMo container entirely — pip install vs multi-GB image. Check early,
-  it changes the Phase 3.5 environment.
+- ~~Is the foundation-model checkpoint loadable as standard Llama?~~ **Resolved** -- yes,
+  `transformers` 5.17, no NeMo.
 - ~~All storage estimates in ARCHITECTURE.md section 4.4 are unmeasured.~~ **Resolved
   2026-09-16** -- section 4.4 now carries measured figures.
 

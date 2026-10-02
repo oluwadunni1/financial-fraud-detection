@@ -2,7 +2,7 @@
 
 > The reference doc for this repo: system design, storage budget, phased build plan,
 > verification strategy. Section 6 has the phases; section 10 is the Lightning AI setup.
-> Last updated: 2026-09-16 (Phase 0 complete -- estimates replaced by measurements)
+> Last updated: 2026-10-02 (Phase 3.5 complete -- foundation model measured, not registered)
 
 ---
 
@@ -701,23 +701,59 @@ Before the fix the GNN scored val 0.1435 and the conclusion being written was *"
 structure doesn't help on this dataset"*. After it: 0.6795. `gnn.dedupe_non_fraud` is now a
 parameter, defaulting false, with the measurement recorded beside it.
 
-### Phase 3.5 — Foundation model challenger (Lightning AI)
+### Phase 3.5 — Foundation model challenger — **COMPLETE (2026-10-01), not registered**
 
-Source: https://github.com/oluwadunni1/transaction-foundation-model -- a decoder-only
-Llama (~29M params) pretrained on TabFormer sequences via causal LM, used as a frozen
-feature extractor (last-token pooling -> 512-d embeddings -> XGBoost).
+Source: https://github.com/oluwadunni1/transaction-foundation-model -- a fork of
+`NVIDIA-AI-Blueprints/transaction-foundation-model`, **0 commits ahead or behind**, so the
+checkpoint (decoder-only Llama, 28,954,112 params), tokenizer and pretraining are NVIDIA's own.
 
-- [ ] **Do NOT pretrain.** The repo ships a 56 MB checkpoint via Git LFS; pretraining
-      needs 8x A100 and would burn the entire Lightning budget. Forward pass only.
-- [ ] Check the checkpoint format first. If it loads as standard Llama in plain
-      `transformers`, skip the NeMo container entirely -- that is a pip install versus
-      a multi-GB image, and it keeps the CPU-servable story intact.
-- [ ] Extract user-level embeddings -> `fm_embeddings` table (vector(512))
-- [ ] Train the downstream head; log to MLflow as a **challenger**, not a champion
-- [ ] Record serving profile alongside accuracy: this model can run precomputed
-      (stale, cheap) *or* live (fresh, slower). Measure both -- it is a real tradeoff.
-- **Done when:** three models sit in the registry with comparable metrics, and the
-  challenger is servable through the same `/predict` contract as the champion.
+- [x] **Did NOT pretrain.** Forward pass only, frozen weights.
+- [x] Loads as plain Llama under `transformers` 5.17 -- no NeMo container needed.
+- [x] Tokenizer ported and verified id-for-id (all 6,246 non-special tokens). The
+      merchant-hash gate is closed: cuDF `hash_values()` and our `mmh3` agree on all
+      100,343 merchants.
+- [x] Two embedding arms, 7,214,337 transactions each (2016+), float16, T4:
+      **isolated** (9 min) and **contextual** (40 min).
+- [x] Downstream head: upstream notebook 05's shape (PCA 512->64, XGBoost on base /
+      embeddings-only / combined), on OUR evaluation (real distribution, `scale_pos_weight`
+      swept, threshold on 2018, 2019 headline). `fm_head` stage, `reports/metrics_fm.json`.
+- [x] Logged to MLflow as a record (parent run `fm-phase3.5-experiment` + 5 nested runs,
+      `reports/mlflow_fm.json`). **Not registered** -- no claim on either alias.
+
+#### Same approach as NVIDIA? Model yes, extraction no -- so both were run
+
+| | NVIDIA (notebooks 04/05) | Our first design |
+|---|---|---|
+| Embedding input | each transaction **alone**: `<bos> T <eos>`, pooled at `<eos>` | each transaction **in its card's history**, up to 314 prior txns |
+| Head | PCA 64 + XGBoost, balanced 1M train, 100k stratified eval, spw=1 | same head shape, our evaluation |
+
+| Test 2019 AUC-PR (train 2016-17 rows only) | |
+|---|---|
+| base features only | 0.1797 |
+| isolated (NVIDIA) + base | **0.2215** (+23%) |
+| isolated embeddings only | 0.1134 |
+| contextual + base | 0.1368 (-24%) |
+| contextual embeddings only | 0.0016 (chance) |
+
+**Why the contextual arm fails.** Deep in a 4096-token context the final layer encodes the
+*card*, not the transaction: the share of embedding variance that changes between
+transactions within a card is **~0%** at the CUST read position (1.1% at `<sep>`), against
+**66%** for the isolated arm. PCA's top components are therefore card identity, which cannot
+transfer from 2016-17 cards to 2019 fraud -- the same static-per-entity failure as the GNN's
+frozen embeddings (0.1351 vs 0.2113). Storage was verified bit-exact against a recompute and
+fp16 against fp32 (cosine 0.999999), so this is the representation, not a bug.
+
+**Do not "align" the contextual read point with NVIDIA's `<eos>`.** In a sequence that token
+is `<sep>` if a later transaction exists and `<eos>` if not -- it encodes "is this the card's
+last transaction", which is future information and in TabFormer correlates with fraud.
+
+**Leakage check on the checkpoint itself.** NVIDIA's 80/90% cumulative cutoffs are
+2017-05-14 and 2018-10-12. Pretraining-train sits inside our train split; pretraining-val
+overlaps most of our 2018 (LM loss only, no labels). **Test 2019 was never seen.**
+
+Verdict: sequential structure, as this frozen model exposes it, is worth +23% over the
+same-rows base -- real, but the best FM head (0.2215) is below the champion (0.2501, which
+saw 20.6M rows) and half of GraphSAGE served (0.4667). Relational structure wins.
 
 #### Why this is cheap to add
 Both approaches have an **identical serving contract**: precompute embeddings offline,

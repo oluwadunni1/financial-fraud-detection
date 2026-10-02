@@ -61,6 +61,14 @@ def token_position(index_in_window: int) -> int:
     <bos> is position 0, so transaction k spans [1 + 13k, 12 + 13k] and its
     final token -- the one whose hidden state becomes the embedding -- is at
     12 + 13k.
+
+    NOT the boundary token after it, although upstream pools at `<eos>`. In a
+    sequence that token is `<sep>` when a later transaction exists in the
+    window and `<eos>` when none does, so reading there would encode "is this
+    the card's last transaction" -- future information, and in TabFormer a
+    card's history often ends right after fraud. Upstream's `<eos>` is safe
+    only because it embeds every transaction alone; that replica lives in
+    `fraud.models.fm_embed_isolated`.
     """
     return TOKENS_PER_TRANSACTION + TOKENS_PER_SLOT * index_in_window
 

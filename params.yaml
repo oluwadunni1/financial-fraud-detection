@@ -26,8 +26,11 @@ paths:
   fm_sequences_summary: reports/fm_sequences.json
   fm_embeddings: data/features/fm_embeddings
   fm_embeddings_summary: reports/fm_embeddings.json
+  fm_embeddings_isolated: data/features/fm_embeddings_isolated
+  fm_embeddings_isolated_summary: reports/fm_embeddings_isolated.json
   fm_checkpoint: data/models/fm
   fm_metrics: reports/metrics_fm.json
+  fm_head: data/models/fm_head
   registry_report: reports/registry.json
 
 # --- foundation model (Phase 3.5) ----------------------------------------
@@ -41,7 +44,17 @@ fm:
   # length keeps us out of RoPE extrapolation.
   seq_length: 4096
   batch_size: 16
+  # The isolated arm (upstream's per-row extraction) feeds 14-token inputs,
+  # so it batches ~300x wider than the 4096-token sequences.
+  isolated_batch_size: 4096
   dtype: float16
+  # Downstream head: upstream notebook 05's structure (PCA 512 -> 64, then
+  # XGBoost on base / embeddings-only / combined), our evaluation. PCA is
+  # fitted on a sample of TRAIN rows; 3.4M x 512 fp32 would not fit in RAM.
+  head:
+    pca_dim: 64
+    pca_fit_rows: 500000
+    device: cuda   # XGBoost on the T4; "cpu" works, just slower
   # Pulled into our own pipeline rather than depending on `git lfs` at run
   # time. GitHub serves LFS content from media.githubusercontent.com; the raw
   # host returns a 133-byte pointer that looks like a valid file.

@@ -1,0 +1,13 @@
+{
+  "transactions": 7214337,
+  "dim": 512,
+  "stored_dtype": "float16",
+  "megabytes": 7387.5,
+  "any_nan": false,
+  "pooling": "<eos> after the transaction encoded alone (upstream notebook 04)",
+  "input_width": 14,
+  "device": "cuda",
+  "dtype": "float16",
+  "batch_size": 4096,
+  "seconds": 534.4
+}

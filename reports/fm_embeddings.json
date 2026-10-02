@@ -1,0 +1,13 @@
+{
+  "transactions": 7214337,
+  "dim": 512,
+  "stored_dtype": "float16",
+  "megabytes": 7387.5,
+  "any_nan": false,
+  "sequences": 44627,
+  "pooling": "last field token (CUST) of each transaction, in sequence",
+  "device": "cuda",
+  "dtype": "float16",
+  "batch_size": 16,
+  "seconds": 2385.0
+}

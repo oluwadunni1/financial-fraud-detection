@@ -584,8 +584,8 @@ stages:
       isexec: true
     - path: src/fraud/models/evaluate_gnn.py
       hash: md5
-      md5: 79e62c40c834005c6007a99d240acfe8
-      size: 10464
+      md5: c9719371b5218f1220a5c7e0b9ad853f
+      size: 10619
       isexec: true
     - path: src/fraud/models/metrics.py
       hash: md5
@@ -670,12 +670,14 @@ stages:
       isexec: true
     - path: src/fraud/features/fm_sequences.py
       hash: md5
-      md5: 67a462b3adee8b6c74d077d47a5fb3b5
-      size: 7678
+      md5: da84925a30f4ba40ea7dece1987cf311
+      size: 8172
+      isexec: true
     - path: src/fraud/features/fm_tokenizer.py
       hash: md5
       md5: ede01532462bca80d1af234e290cf5c4
       size: 10031
+      isexec: true
     params:
       params.yaml:
         fm.min_year: 2016
@@ -690,8 +692,8 @@ stages:
       nfiles: 2
     - path: reports/fm_sequences.json
       hash: md5
-      md5: d0a221c703ba4c51e7745311cf24266d
-      size: 194
+      md5: 1b9c141b10c2b0a498c9990848c4e17b
+      size: 195
   fetch_fm_checkpoint:
     cmd: .venv/bin/python -m fraud.models.fm_checkpoint
     deps:
@@ -717,3 +719,187 @@ stages:
       md5: b2ac023c83d7009a197c5dbeeadba23c.dir
       size: 57923970
       nfiles: 4
+  fm_embeddings_isolated:
+    cmd: .venv/bin/python -m fraud.models.fm_embed_isolated
+    deps:
+    - path: data/features/fm_sequences
+      hash: md5
+      md5: 1960f03f4c273a55908d1c040969516f.dir
+      size: 47588502
+      nfiles: 2
+    - path: data/models/fm
+      hash: md5
+      md5: b2ac023c83d7009a197c5dbeeadba23c.dir
+      size: 57923970
+      nfiles: 4
+    - path: src/fraud/config.py
+      hash: md5
+      md5: 15b58a3afbc5288c8e2113506e439a84
+      size: 1196
+      isexec: true
+    - path: src/fraud/features/fm_tokenizer.py
+      hash: md5
+      md5: ede01532462bca80d1af234e290cf5c4
+      size: 10031
+      isexec: true
+    - path: src/fraud/models/fm_embed.py
+      hash: md5
+      md5: 5ee390c548576f03b19a91f26d557f90
+      size: 11838
+      isexec: true
+    - path: src/fraud/models/fm_embed_isolated.py
+      hash: md5
+      md5: 6ca8e7b5b8b9ccf788bccb85d77c9391
+      size: 6466
+    params:
+      params.yaml:
+        fm.dtype: float16
+        fm.isolated_batch_size: 4096
+        paths.fm_checkpoint: data/models/fm
+        paths.fm_embeddings_isolated: data/features/fm_embeddings_isolated
+        paths.fm_sequences: data/features/fm_sequences
+    outs:
+    - path: data/features/fm_embeddings_isolated
+      hash: md5
+      md5: 3faf7c079201ce2d707431e9991269f3.dir
+      size: 7445196040
+      nfiles: 2
+    - path: reports/fm_embeddings_isolated.json
+      hash: md5
+      md5: cc7a61ca5ccd8377907ff75439228bbe
+      size: 301
+  fm_embeddings:
+    cmd: .venv/bin/python -m fraud.models.fm_embed
+    deps:
+    - path: data/features/fm_sequences
+      hash: md5
+      md5: 1960f03f4c273a55908d1c040969516f.dir
+      size: 47588502
+      nfiles: 2
+    - path: data/models/fm
+      hash: md5
+      md5: b2ac023c83d7009a197c5dbeeadba23c.dir
+      size: 57923970
+      nfiles: 4
+    - path: src/fraud/config.py
+      hash: md5
+      md5: 15b58a3afbc5288c8e2113506e439a84
+      size: 1196
+      isexec: true
+    - path: src/fraud/features/fm_tokenizer.py
+      hash: md5
+      md5: ede01532462bca80d1af234e290cf5c4
+      size: 10031
+      isexec: true
+    - path: src/fraud/models/fm_embed.py
+      hash: md5
+      md5: 5ee390c548576f03b19a91f26d557f90
+      size: 11838
+      isexec: true
+    params:
+      params.yaml:
+        fm.batch_size: 16
+        fm.dtype: float16
+        paths.fm_checkpoint: data/models/fm
+        paths.fm_embeddings: data/features/fm_embeddings
+        paths.fm_sequences: data/features/fm_sequences
+    outs:
+    - path: data/features/fm_embeddings
+      hash: md5
+      md5: 6ba3bb620baf0b560be8d72899628d30.dir
+      size: 7445196040
+      nfiles: 2
+    - path: reports/fm_embeddings.json
+      hash: md5
+      md5: a09c3dc56a9dbb087eee30a9e995ec8e
+      size: 293
+  fm_head:
+    cmd: .venv/bin/python -m fraud.models.fm_head
+    deps:
+    - path: data/features/fm_embeddings
+      hash: md5
+      md5: 6ba3bb620baf0b560be8d72899628d30.dir
+      size: 7445196040
+      nfiles: 2
+    - path: data/features/fm_embeddings_isolated
+      hash: md5
+      md5: 3faf7c079201ce2d707431e9991269f3.dir
+      size: 7445196040
+      nfiles: 2
+    - path: data/features/matrix
+      hash: md5
+      md5: f4dd8f400cac419fae6909e1f5ef8295.dir
+      size: 803720534
+      nfiles: 30
+    - path: src/fraud/config.py
+      hash: md5
+      md5: 15b58a3afbc5288c8e2113506e439a84
+      size: 1196
+      isexec: true
+    - path: src/fraud/data/split.py
+      hash: md5
+      md5: f796c5b8bd1914b9ccd2848259845e52
+      size: 6355
+      isexec: true
+    - path: src/fraud/models/evaluate_gnn.py
+      hash: md5
+      md5: c9719371b5218f1220a5c7e0b9ad853f
+      size: 10619
+      isexec: true
+    - path: src/fraud/models/fm_head.py
+      hash: md5
+      md5: 62d25cffea2db47448956ff44a01b9c8
+      size: 10169
+    - path: src/fraud/models/metrics.py
+      hash: md5
+      md5: 8c61219f8569b24773965b34d8cde696
+      size: 4916
+      isexec: true
+    params:
+      params.yaml:
+        evaluate:
+          target_false_positive_rate: 0.01
+          precision_at_k:
+          - 100
+          - 1000
+        fm.head:
+          pca_dim: 64
+          pca_fit_rows: 500000
+          device: cuda
+        fm.min_year: 2016
+        paths.feature_matrix: data/features/matrix
+        paths.fm_embeddings: data/features/fm_embeddings
+        paths.fm_embeddings_isolated: data/features/fm_embeddings_isolated
+        paths.fm_head: data/models/fm_head
+        paths.fm_metrics: reports/metrics_fm.json
+        split:
+          train_end_year: 2017
+          val_year: 2018
+        xgboost:
+          n_estimators: 500
+          max_depth: 8
+          learning_rate: 0.05
+          subsample: 0.8
+          colsample_bytree: 0.8
+          scale_pos_weight: 10
+          scale_pos_weight_grid:
+          - 1
+          - 10
+          - 50
+          - 200
+          - 819
+          sweep_sample_fraction: 0.15
+          sweep_n_estimators: 150
+          eval_metric: aucpr
+          early_stopping_rounds: 50
+          random_state: 42
+    outs:
+    - path: data/models/fm_head
+      hash: md5
+      md5: 9ead2aee52b49913bb996ccfb62da483.dir
+      size: 33013050
+      nfiles: 7
+    - path: reports/metrics_fm.json
+      hash: md5
+      md5: a9f6a50b1799f6648970fa38ca74dc0c
+      size: 12998

@@ -44,3 +44,6 @@ mlruns/
 # (`fraud.jobs.replay --shards 4`, ~53 min) and 30+ MB a pair, which does not
 # belong in git. The JSON summaries beside them ARE tracked.
 reports/*.npz
+
+# cuFile (GPU Direct Storage) writes this beside whatever ran CUDA I/O.
+cufile.log
