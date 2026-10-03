@@ -845,7 +845,7 @@ diff 6e-08, float32 storage). The full 2019 replay was re-run with the tie fix: 
 Out of scope here: concurrency. The API holds one shared connection, fine for sequential
 requests, but the Phase 6 load test needs a `psycopg_pool` first.
 
-### Phase 5 — Monitoring and explainability — **first half DONE (2026-10-03)**
+### Phase 5 — Monitoring and explainability — **DONE (2026-10-03)**
 
 Run as notebook experiments on production code: `notebooks/phase5/*.ipynb` (committed
 executed, smoke-tested in sample mode by `tests/test_notebooks.py`) call
@@ -860,9 +860,12 @@ exactly what the notebooks show.
 - [x] **Degradation shows up as an estimated-performance drop** -- on the real 2019
       degradation, not an artificial one
 - [x] SHAP reason codes for XGBoost; exact group Shapley for GraphSAGE
-- [ ] `refresh_embeddings.py` -- moot for GraphSAGE now that it scores live history (decision 3)
-- [ ] Freshness SLI: `max(now - computed_at)`
-- [ ] **Staleness experiment** (see §6.2)
+- [x] ~~`refresh_embeddings.py`~~ -- **superseded**: GraphSAGE scores live history (decision 3),
+      so there are no served embeddings to refresh
+- [x] Freshness SLIs: hot-store lag and label lag vs the job's clock, alert above 24 h
+- [x] **Staleness experiment** (§6.2), reframed for live history: AUC-PR vs *ingest* lag
+- [x] Production job `fraud.monitoring.run`: closed months, persistence rule, `drift_metrics`
+      + `job_watermarks` -- run against Supabase (`--as-of 2019-11-01 --write`)
 
 **Two environments.** NannyML 0.13 cannot share `.venv`: its pins either pull XGBoost
 3.4.1 → 2.1.4 (the boosters were not saved with it) or numpy/pandas/pyarrow down. It lives
@@ -905,6 +908,31 @@ model, 36 transactions):
   push comes from **velocity (47%) and the transaction (41%)**; the graph groups add 12%
   combined. These alerts are saturated near 1.0 -- where the neighbourhood earns the 2x is
   a question for mid-score transactions, and the next explainability experiment.
+
+**Second half** (`03_staleness_and_operations.ipynb`, plus §6 of `02_explainability`):
+
+- **Where GraphSAGE wins, the graph is not what wins it.** Group Shapley on the 51 frauds it
+  ranks in its top 5,000 that XGBoost ranks below 20,000 -- and on 50 frauds both catch --
+  gives the same profile: transaction ~50%, velocity ~35%, graph groups **~15% in every set**.
+  Its edge is in how it reads the transaction and its velocity, not in the neighbourhood at
+  scoring time. The decisive test is a graph-off ablation of the served model (next step).
+- **Staleness, measured.** GraphSAGE replayed on Apr-Jun 2019 (429,456 rows, 693 frauds)
+  with history visible only once it is `lag` old; lag 0 reproduces the full replay row for row.
+
+  | ingest lag | 0 | 1 h | 6 h | 24 h | 72 h | 168 h |
+  |---|---|---|---|---|---|---|
+  | AUC-PR | 0.551 | **0.624** | 0.605 | 0.588 | **0.451** | 0.577 |
+  | Δ vs 0 (95% CI) | | +0.074 [+.051,+.096] | +0.054 | +0.038 | −0.100 [−.140,−.058] | +0.026 (ns) |
+
+  A short lag *helps*. Decomposed at 1 h: graph-only lag +0.014, **velocity-only lag
+  +0.072** -- nearly all of it. Hiding the latest hour from velocity improves 2019 scoring:
+  the short-window velocity signal learned on ≤2017 data has drifted in meaning (01 flagged
+  `velocity_seconds_since_last`). That is a model/feature fix (retrain, review the 1 h and
+  seconds-since-last features), not an ingest one. **Ingest SLA: 24 h**, the largest lag
+  measured safe; the 72 h dip is non-monotonic and should be replicated before relied on.
+- **The monthly job pages for the right model.** Clock at each month's first day: XGBoost
+  alerts from **1 May 2019** (5 of 11 runs), GraphSAGE **never** -- its single weak months are
+  absorbed by the two-month persistence rule.
 
 ### Phase 6 — CI/CD, model swapping & deploy
 

@@ -166,9 +166,9 @@ class Predictor:
         """
         started = time.perf_counter()
 
-        velocity = velocity_for_transaction(
-            transaction, neighbourhood.user_history, self.windows_hours
-        )
+        history = (neighbourhood.user_history if neighbourhood.velocity_history is None
+                   else neighbourhood.velocity_history)
+        velocity = velocity_for_transaction(transaction, history, self.windows_hours)
         graph = build_request_graph(
             transaction,
             velocity,

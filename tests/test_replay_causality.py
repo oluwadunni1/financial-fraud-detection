@@ -229,3 +229,58 @@ def test_a_same_minute_row_does_not_cost_a_user_neighbour():
     history.add(txn(50, user=7, ts=now), {})
     seen = history.neighbourhood(txn(51, user=7, ts=now)).user_history
     assert sorted(seen["txn_id"].to_list()) == list(range(10))
+
+
+def test_a_visibility_lag_hides_exactly_the_recent_rows():
+    """The staleness experiment's mechanism: with a 6 h lag, a row is visible
+    only once it is 6 h old -- what a store whose ingest runs 6 h behind shows."""
+    h = CausalHistory(window_hours=168, merchant_cap=10, visibility_lag_hours=6)
+    base = D(2019, 6, 1, 0, 0)
+    for i, hours in enumerate([1, 3, 5, 7, 9]):
+        h.add(txn(i, user=7, ts=base - dt.timedelta(hours=hours)), {})
+    seen = h.neighbourhood(txn(99, user=7, ts=base)).user_history
+    assert sorted(seen["txn_id"].to_list()) == [3, 4]          # only the 7 h and 9 h rows
+
+
+def test_a_lagged_merchant_still_gets_its_full_neighbour_cap():
+    """Rows inside the lag are invisible, so they must not evict the older
+    rows that ARE visible -- the deque(maxlen) bug again, at a larger scale."""
+    h = CausalHistory(window_hours=168, merchant_cap=3, visibility_lag_hours=24)
+    base = D(2019, 6, 10)
+    for i in range(3):                                          # old, visible
+        h.add(txn(i, user=100 + i, ts=base - dt.timedelta(days=5 - i)), {})
+    for i in range(3, 9):                                       # recent, lagged
+        h.add(txn(i, user=100 + i, ts=base - dt.timedelta(hours=9 - i)), {})
+    seen = h.neighbourhood(txn(50, user=200, ts=base)).merchant_history
+    assert sorted(seen["txn_id"].to_list()) == [0, 1, 2]
+
+
+def test_zero_lag_is_serving_as_built():
+    a = CausalHistory(window_hours=168, merchant_cap=10)
+    b = CausalHistory(window_hours=168, merchant_cap=10, visibility_lag_hours=0)
+    base = D(2019, 6, 1)
+    for i in range(15):
+        row = txn(i, user=7, ts=base - dt.timedelta(hours=(14 - i) * 7))
+        a.add(row, {})
+        b.add(row, {})
+    probe = txn(99, user=7, ts=base)
+    assert a.neighbourhood(probe).user_history.equals(b.neighbourhood(probe).user_history)
+    assert a.neighbourhood(probe).merchant_history.equals(b.neighbourhood(probe).merchant_history)
+
+
+@pytest.mark.parametrize("mode", ["graph", "velocity"])
+def test_a_lag_can_be_applied_to_one_consumer_only(mode):
+    """The decomposition behind the staleness result: lag the graph's view or
+    velocity's view, never both, and leave the other fresh."""
+    h = CausalHistory(window_hours=168, merchant_cap=10, visibility_lag_hours=6,
+                      lag_applies_to=mode)
+    base = D(2019, 6, 1)
+    for i, hours in enumerate([1, 3, 9]):
+        h.add(txn(i, user=7, ts=base - dt.timedelta(hours=hours)), {})
+    nb = h.neighbourhood(txn(99, user=7, ts=base))
+    lagged, fresh = [2], [0, 1, 2]
+    graph, velocity = sorted(nb.user_history["txn_id"].to_list()), \
+        sorted(nb.velocity_history["txn_id"].to_list())
+    assert (graph, velocity) == ((lagged, fresh) if mode == "graph" else (fresh, lagged))
+    merchant = sorted(nb.merchant_history["txn_id"].to_list())
+    assert merchant == (lagged if mode == "graph" else fresh)

@@ -42,13 +42,16 @@ phases; section 10 is the Lightning AI setup.
 
 ## Current state (update as phases complete)
 
-**Phase 5, first half (2026-10-03).** Two notebooks on production code
+**Phase 5 done (2026-10-03).** Three notebooks on production code
 (`notebooks/phase5/`). Without a single label, NannyML CBPE reads XGBoost's 2019 drop
 (true −24%, estimated −18%) and GraphSAGE's stability (−2% / −2%), flagging XGBoost **89
 days** before delayed chargebacks could. Exact explanations for both models: XGBoost's
 false positives are almost all `Chip = Online`; GraphSAGE's top alerts are driven by
-velocity and the transaction, not the graph. Monitoring runs in `.venv-monitoring`
-(decision 24).
+velocity and the transaction, not the graph -- including the frauds only GraphSAGE catches.
+A 1 h ingest lag *raises* GraphSAGE's AUC-PR (+0.074), almost all through velocity: the
+short-window velocity signal has drifted since training (decision 27). Ingest SLA 24 h. The
+monthly job (`fraud.monitoring.run`) alerts on XGBoost from May 2019, never on GraphSAGE.
+Monitoring runs in `.venv-monitoring` (decision 24).
 
 **Phase 4 closed (2026-10-03).** Latency measured with Supabase in the loop: 427 ms from
 this Studio, 96% of it the 68 ms transatlantic round trip. Cutting 6 database round trips to
@@ -84,7 +87,9 @@ subgraph, p50 5.4ms / p95 13.0ms in-process (the database is measured in Phase 4
 | Foundation model | **Measured, not registered** -- best head 0.2215, MLflow run `fm-phase3.5-experiment` |
 | Monitoring | **Experiment done** -- `01_monitoring.ipynb`; CBPE + drift → `drift_metrics` rows (Parquet; Supabase write is opt-in) |
 | Explainability | **Experiment done** -- `02_explainability.ipynb`; exact TreeSHAP reason codes + GraphSAGE group Shapley |
-| Tests | **292 passing** in `.venv` across 19 files, **11** under `.venv-monitoring` |
+| Staleness | **Measured** -- `03_staleness_and_operations.ipynb`; ingest SLA 24 h; velocity drift found |
+| Monitoring job | **Running** -- `python -m fraud.monitoring.run`; rows + watermarks in Supabase (as of 2019-11-01) |
+| Tests | **301 passing** in `.venv` across 19 files, **14** under `.venv-monitoring` |
 
 Measured dataset facts now live in `docs/ARCHITECTURE.md` section 2.1. Read that before
 writing any feature code -- several of them contradict what the scaffolding assumed.
@@ -218,6 +223,12 @@ These were settled deliberately. Reopen only if new evidence appears.
    Shapley over five groups (32 forward passes), each group removed along a path the model
    already knows. Tests assert efficiency and that the full coalition equals the served
    score -- an explanation of a different input than the one scored is worse than none.
+27. **GraphSAGE's short-window velocity features have drifted; fix the model, not ingest.**
+   Lagging only velocity by 1 h raises 2019 AUC-PR by +0.072 [+0.052, +0.095]; lagging only
+   the graph, +0.014. Velocity is computed identically offline and online (skew test), so the
+   learned meaning of the 1 h / seconds-since-last signal is what moved -- monitoring flagged
+   `velocity_seconds_since_last` independently. Do NOT ship a deliberate ingest lag as a
+   "fix": it is a symptom. Retrain or review those features. Ingest SLA stays 24 h.
 
 ## Conventions
 
@@ -328,6 +339,11 @@ These were settled deliberately. Reopen only if new evidence appears.
   so realized metrics are undefined there while label-free estimates are not -- CBPE keeps
   estimating 0.27-0.38. A change in the label distribution is invisible in the scores.
 - **Monthly AUC-PR at ~200 frauds swings ±0.1 on noise alone.** Never alert on one month.
+- **`nbconvert --execute --inplace` can rewrite a notebook's kernelspec** (01 became
+  `python3`, the main env without NannyML). `tests/test_notebooks.py` asserts each
+  notebook names its kernel.
+- **Never run a sharded replay from a stdin script.** `spawn` workers re-import `__main__`
+  from a file that does not exist and the pool hangs. Use the module entry points.
 - **`source .venv/bin/activate` does NOT change which `python` runs.** The shell profile
   activates conda and zsh caches the lookup, so a bare `python` silently stays on
   `/home/zeus/miniconda3/envs/cloudspace/bin/python` even though `which python` says

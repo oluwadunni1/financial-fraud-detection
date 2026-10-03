@@ -59,6 +59,10 @@ class Neighbourhood:
 
     user_history: pl.DataFrame      # this card's recent rows
     merchant_history: pl.DataFrame  # this merchant's recent rows
+    # Velocity normally reads `user_history`. Only the staleness experiment sets
+    # this, to give velocity a different view of the past than the graph and
+    # find out which of the two a lagging store actually affects.
+    velocity_history: pl.DataFrame | None = None
 
     @property
     def cold_start_user(self) -> bool:

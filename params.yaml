@@ -287,6 +287,15 @@ monitoring:
   # (XGBoost's lower threshold is 0). So degradation is also flagged against
   # the reference level directly: estimate below (1 - tolerance) x reference.
   degradation_tolerance: 0.15
+  # An alert needs this many CONSECUTIVE flagged months (decision 25): monthly
+  # AUC-PR swings by ±0.1 on noise, so one month alone pages on noise.
+  persistence_months: 2
+  # Freshness SLIs (fraud.monitoring.run). hot_store_max_hours comes from the
+  # staleness experiment (notebook 03): no lag up to 24 h made GraphSAGE worse;
+  # 72 h cost -0.10 AUC-PR [-0.14, -0.06]. 24 h is the largest lag measured safe.
+  freshness:
+    hot_store_max_hours: 24
+    labels_max_hours: 72
   output_dir: reports/monitoring
 
 # --- explainability (Phase 5) ---------------------------------------------
@@ -297,3 +306,15 @@ explain:
   # GraphSAGE group Shapley: the five "players". Absent = the path the model
   # already handles for a missing input (see fraud.explain.graph).
   graph_groups: [transaction, velocity, card_history, merchant_history, identity]
+
+# --- staleness experiment (Phase 5, ARCHITECTURE 6.2) ---------------------------
+# GraphSAGE reads live history, so the staleness that matters is how far the hot
+# store's INGEST runs behind: a row visible only once it is `lag` old. Replayed
+# on a 2019 slice per lag; lag 0 must reproduce reports/metrics_replay.npz.
+staleness:
+  start: "2019-04-01"
+  end: "2019-07-01"           # exclusive; Apr-Jun 2019, ~430k rows
+  lags_hours: [0, 1, 6, 24, 72, 168]
+  shards: 4
+  bootstrap: 300              # paired resamples for the AUC-PR difference vs lag 0
+  output_dir: reports/staleness

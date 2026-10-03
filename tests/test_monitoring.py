@@ -187,3 +187,53 @@ def test_degradation_is_judged_against_the_reference_level():
     out = flag_degradation(est, reference_level=0.5, tolerance=0.15)
     assert out["degraded"].to_list() == [False, False, True]     # 0.425 is the line
     assert out["relative_change"].to_list() == pytest.approx([0.0, -0.12, -0.4])
+
+
+# --- the production job --------------------------------------------------------------
+
+def test_an_alert_needs_consecutive_flagged_months():
+    from fraud.monitoring.run import persistent
+
+    flags = [True, False, True, True, False, True, True, True]
+    assert persistent(flags, 2) == [False, False, False, True, False, False, True, True]
+    assert persistent(flags, 1) == flags
+
+
+def test_only_closed_months_are_monitored():
+    from fraud.monitoring.run import closed_before
+
+    out = closed_before(frame(), dt.datetime(2019, 3, 15, 9, 30))
+    assert out["ts"].max() < dt.datetime(2019, 3, 1)      # March is still open
+
+
+def test_job_writes_metrics_freshness_and_a_watermark():
+    """Into TEMP shadows of the live tables, rolled back."""
+    from fraud.monitoring.run import freshness, write
+
+    conn = _db()
+    params = {"monitoring": {"freshness": {"hot_store_max_hours": 1, "labels_max_hours": 72}}}
+    as_of = dt.datetime(2019, 6, 3, 12, 0)
+    try:
+        with conn.cursor() as cur:
+            for table in ("drift_metrics", "job_watermarks", "transaction_events", "labels"):
+                cur.execute(f"create temp table {table} (like public.{table} including all)")
+            cur.execute("alter table drift_metrics add column if not exists model text")
+            cur.execute("insert into transaction_events "
+                        "(txn_id, user_id, merchant_id, ts, amount, mcc) "
+                        "values (1, 1, 1, %s, 1, 5411)", (as_of - dt.timedelta(hours=3),))
+        fresh = freshness(conn, as_of, params)
+        row = fresh.row(0, named=True)
+        assert row["metric"] == "freshness_hot_store_hours"
+        assert row["value"] == pytest.approx(3.0) and row["alert"]       # 3 h > 1 h SLA
+        assert fresh.height == 1                                          # no labels yet
+
+        result = {"rows": sink.drift_rows(fresh, "platform"), "cursor": as_of,
+                  "analysis_rows": 10}
+        assert write(conn, result, "monitoring:test", as_of) == 1
+        assert write(conn, result, "monitoring:test", as_of) == 1         # watermark upserts
+        with conn.cursor() as cur:
+            cur.execute("select job_name, rows_processed from job_watermarks")
+            assert cur.fetchall() == [{"job_name": "monitoring:test", "rows_processed": 10}]
+    finally:
+        conn.rollback()
+        conn.close()

@@ -44,10 +44,20 @@ def test_notebook_executes_in_sample_mode(path: pathlib.Path, monkeypatch):
     client.execute()   # raises CellExecutionError on the first failing cell
 
 
-def test_committed_notebooks_carry_outputs():
-    """They are committed executed, so the charts read on GitHub."""
+# NannyML notebooks need the monitoring env; everything else needs the boosters.
+EXPECTED_KERNEL = {"01_monitoring": "fraud-monitoring",
+                   "02_explainability": "fraud",
+                   "03_staleness_and_operations": "fraud-monitoring"}
+
+
+def test_committed_notebooks_carry_outputs_and_the_right_kernel():
+    """They are committed executed, so the charts read on GitHub -- and they
+    name the kernel they need. `nbconvert --execute --inplace` once rewrote
+    01's kernelspec to `python3` (the main env, no NannyML): the notebook still
+    looked fine on GitHub and failed for anyone who opened it."""
     assert NOTEBOOKS, "no Phase 5 notebooks found"
     for path in NOTEBOOKS:
         nb = nbformat.read(path, as_version=4)
+        assert nb.metadata["kernelspec"]["name"] == EXPECTED_KERNEL[path.stem], path.name
         code = [c for c in nb.cells if c.cell_type == "code"]
         assert all(c.get("outputs") for c in code[:3]), f"{path.name} is not executed"

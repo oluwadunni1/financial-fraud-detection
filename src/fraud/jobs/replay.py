@@ -74,9 +74,19 @@ class CausalHistory:
     pure row cap with no age bound.
     """
 
-    def __init__(self, window_hours: int, merchant_cap: int):
+    def __init__(self, window_hours: int, merchant_cap: int,
+                 visibility_lag_hours: float = 0.0, lag_applies_to: str = "both"):
         self.window = dt.timedelta(hours=window_hours)
         self.merchant_cap = merchant_cap
+        # The staleness experiment: a row becomes visible only once it is
+        # `visibility_lag_hours` old, as if the hot store's ingest ran that far
+        # behind. 0 is serving as built -- and must reproduce the replay exactly.
+        self.lag = dt.timedelta(hours=visibility_lag_hours)
+        # "both" is a lagging store. "graph" / "velocity" lag one consumer and
+        # leave the other fresh -- the decomposition that says which one moves.
+        if lag_applies_to not in ("both", "graph", "velocity"):
+            raise ValueError(f"lag_applies_to must be both/graph/velocity, not {lag_applies_to!r}")
+        self.lag_applies_to = lag_applies_to
         self._users: dict[int, collections.deque] = collections.defaultdict(
             collections.deque
         )
@@ -103,13 +113,14 @@ class CausalHistory:
 
     def neighbourhood(self, transaction: dict[str, Any]) -> Neighbourhood:
         now = transaction["ts"]
+        cutoff = now - self.lag   # == now unless the staleness experiment lags ingest
         rows = self._users[transaction["User"]]
         # Out of the velocity window AND no longer needed as a graph neighbour.
         # The second clause is what keeps a quiet card's older transactions
         # reachable; without it the graph sees nothing but the last week.
         # Rows at or after `now` are invisible here, so they do not count
         # toward the `merchant_cap` strictly-earlier rows the graph needs.
-        keep = self.merchant_cap + self._tied_tail(rows, now)
+        keep = self.merchant_cap + self._tied_tail(rows, cutoff)
         while len(rows) > keep and rows[0]["ts"] < now - self.window:
             rows.popleft()
 
@@ -119,17 +130,26 @@ class CausalHistory:
         # in-memory replay and the database path would disagree with each other
         # *and* with training, on the 142,010 rows that share a user and a
         # minute. Caught by the guard in velocity_for_transaction.
-        visible = [r for r in reversed(rows) if r["ts"] < now]
-        user = pl.DataFrame(visible) if visible else EMPTY
+        lagged = [r for r in reversed(rows) if r["ts"] < cutoff]
+        fresh = lagged if self.lag == dt.timedelta(0) else [
+            r for r in reversed(rows) if r["ts"] < now]
+        graph_rows = fresh if self.lag_applies_to == "velocity" else lagged
+        user = pl.DataFrame(graph_rows) if graph_rows else EMPTY
+        velocity_rows = {"both": None, "graph": fresh, "velocity": lagged}[self.lag_applies_to]
 
         merchant_rows = self._merchants.get(str(transaction["Merchant"]))
+        merchant_cutoff = now if self.lag_applies_to == "velocity" else cutoff
         merchant_visible = (
-            [r for r in reversed(merchant_rows) if r["ts"] < now][: self.merchant_cap]
+            [r for r in reversed(merchant_rows) if r["ts"] < merchant_cutoff][: self.merchant_cap]
             if merchant_rows
             else []
         )
         merchant = pl.DataFrame(merchant_visible) if merchant_visible else EMPTY
-        return Neighbourhood(user_history=user, merchant_history=merchant)
+        return Neighbourhood(
+            user_history=user, merchant_history=merchant,
+            velocity_history=(None if velocity_rows is None
+                              else pl.DataFrame(velocity_rows) if velocity_rows else EMPTY),
+        )
 
     def add(self, transaction: dict[str, Any], velocity: dict[str, float]) -> None:
         """Make a transaction visible -- called only after it was scored."""
@@ -139,7 +159,9 @@ class CausalHistory:
         merchant.append(row)
         # Bounded memory: no later request can see past the newest timestamp's
         # ties, so `cap` rows before them are all a merchant ever needs.
-        keep = self.merchant_cap + self._tied_tail(merchant, row["ts"])
+        # With a visibility lag, everything inside the lag is still invisible to
+        # the next request, so it must not use up the cap either.
+        keep = self.merchant_cap + self._tied_tail(merchant, row["ts"] - self.lag)
         while len(merchant) > keep:
             merchant.popleft()
 
@@ -369,12 +391,15 @@ def _run_shard(job: tuple) -> dict:
     # they save and would fight the other shards for cores.
     torch.set_num_threads(1)
 
-    index, (lo, hi), years, params, model_dir, graph_since = job
-    rows = load_split_rows(params, years, None)[lo:hi]
+    # The shard's own rows travel with the job (a few MB pickled) rather than
+    # being re-read by index, so a slice replays as correctly as a whole year.
+    index, rows, params, model_dir, graph_since, lag_hours, lag_applies_to = job
     predictor = Predictor.from_disk(params, model_dir)
     history = CausalHistory(
         window_hours=params["serving"]["history_hours"],
         merchant_cap=params["serving"]["neighbours"],
+        visibility_lag_hours=lag_hours,
+        lag_applies_to=lag_applies_to,
     )
     seeded = seed_history(
         history, params, rows["ts"].min(), params["serving"]["history_hours"],
@@ -388,7 +413,9 @@ def _run_shard(job: tuple) -> dict:
 
 
 def replay_sharded(
-    rows: pl.DataFrame, params: dict, years: list[int], model_dir, shards: int
+    rows: pl.DataFrame, params: dict, years: list[int], model_dir, shards: int,
+    lag_hours: float = 0.0, graph_since: dt.datetime | None = None,
+    lag_applies_to: str = "both",
 ) -> dict:
     """Replay contiguous time ranges in parallel and stitch them back together."""
     import multiprocessing as mp
@@ -402,12 +429,13 @@ def replay_sharded(
     # different history and score those rows differently -- 2,659 of 20,000 on
     # the first attempt. Bounding both at the same instant is what makes the
     # sharded replay equal to the sequential one rather than merely close.
-    graph_since = rows["ts"].min() - dt.timedelta(
-        hours=params["serving"]["history_hours"]
-    )
+    if graph_since is None:
+        graph_since = rows["ts"].min() - dt.timedelta(
+            hours=params["serving"]["history_hours"]
+        )
     jobs = [
-        (i, r, years, params, model_dir, graph_since)
-        for i, r in enumerate(ranges)
+        (i, rows[lo:hi], params, model_dir, graph_since, lag_hours, lag_applies_to)
+        for i, (lo, hi) in enumerate(ranges)
     ]
 
     started = time.perf_counter()
