@@ -239,3 +239,61 @@ evaluate:
 mlflow:
   experiment_name: fraud-detection
   registered_model_name: fraud-champion
+
+# --- monitoring (Phase 5) -------------------------------------------------
+# Runs in .venv-monitoring (NannyML conflicts with .venv; see pyproject.toml).
+# Question: can a degrading model be seen BEFORE its chargebacks arrive?
+monitoring:
+  reference_year: 2018      # labelled period CBPE calibrates on (= val)
+  # 2019 only: the analysis scores were written for 2019, and TabFormer has no
+  # fraud at all after October 2019 (Nov 2019 - Feb 2020 carry zero positives).
+  analysis_years: [2019]
+  chunk_period: M           # one chunk per calendar month
+  # Scores already written by earlier stages, per model: (reference, analysis).
+  scores:
+    xgboost:
+      reference: reports/scores_xgb_2018.npz
+      analysis: reports/scores_xgb_2019.npz
+    graphsage:
+      reference: reports/metrics_replay_2018.npz
+      analysis: reports/metrics_replay.npz
+  # Simulated chargebacks. A fraud label surfaces after a lognormal delay
+  # (median ~45 days, real chargebacks run 30-90+); a legitimate transaction
+  # counts as confirmed once `confirm_after_days` pass with no chargeback.
+  labels:
+    fraud_delay_median_days: 45
+    fraud_delay_sigma: 0.5
+    fraud_delay_min_days: 7
+    fraud_delay_max_days: 120
+    confirm_after_days: 90
+    seed: 42
+  # A month's label-based metric is trusted once this share of its rows is
+  # labelled; before that it is computed on a biased subset (frauds surface
+  # first, legitimate rows only when their dispute window closes).
+  min_label_coverage: 0.99
+  # The operating point for CBPE's threshold metrics: the score at this FPR on
+  # the reference period, frozen -- the same rule evaluate.py applies.
+  target_false_positive_rate: 0.01
+  # Raw inputs watched for drift, plus the model score itself.
+  drift:
+    continuous: [Amount, Time, velocity_count_24h, velocity_amount_24h,
+                 velocity_count_168h, velocity_seconds_since_last]
+    categorical: [Chip, MCC, State, Errors]
+  # A metric is flagged when it leaves the reference band by this many
+  # standard deviations of the reference chunks (NannyML's default rule).
+  alert_std: 3
+  # NannyML's band is +/- alert_std sigma of the REFERENCE CHUNKS. With ~200
+  # frauds a month, single-month AUC-PR is so noisy that the band is useless
+  # (XGBoost's lower threshold is 0). So degradation is also flagged against
+  # the reference level directly: estimate below (1 - tolerance) x reference.
+  degradation_tolerance: 0.15
+  output_dir: reports/monitoring
+
+# --- explainability (Phase 5) ---------------------------------------------
+explain:
+  top_k_reasons: 5
+  n_alerts: 20              # top-scored 2019 transactions explained per model
+  global_sample: 20000      # rows for the XGBoost beeswarm
+  # GraphSAGE group Shapley: the five "players". Absent = the path the model
+  # already handles for a missing input (see fraud.explain.graph).
+  graph_groups: [transaction, velocity, card_history, merchant_history, identity]

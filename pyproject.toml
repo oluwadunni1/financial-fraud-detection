@@ -42,8 +42,27 @@ gnn = [
     "torch>=2.4",
     "torch-geometric>=2.6",
 ]
+# SEPARATE ENV ONLY -- never install into .venv. NannyML's pins either drag
+# XGBoost 3.4.1 -> 2.1.4 (which the trained boosters were not saved with) or
+# numpy/pandas/pyarrow down under the whole pipeline. It lives in
+# .venv-monitoring, with this package installed `--no-deps`; fraud.monitoring
+# never imports xgboost or torch, so it needs nothing else from the main env.
+#   uv venv --python 3.12 .venv-monitoring
+#   uv pip install --python .venv-monitoring/bin/python -e ".[monitoring]" --no-deps
+#   uv pip install --python .venv-monitoring/bin/python "nannyml==0.13.1" statsmodels \
+#       polars pyarrow matplotlib ipykernel nbclient nbformat "psycopg[binary]" \
+#       pyyaml python-dotenv pytest
 monitoring = [
-    "nannyml>=0.12",
+    "nannyml==0.13.1",
+    "statsmodels",   # imported by nannyml.plots but not declared by it
+]
+# Notebook experiments (notebooks/phase5/). Safe in .venv: resolves without
+# moving any existing package.
+notebook = [
+    "jupyterlab>=4",
+    "ipykernel>=6",
+    "nbclient>=0.10",
+    "nbformat>=5",
 ]
 dashboard = [
     "streamlit>=1.38",

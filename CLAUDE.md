@@ -42,6 +42,14 @@ phases; section 10 is the Lightning AI setup.
 
 ## Current state (update as phases complete)
 
+**Phase 5, first half (2026-10-03).** Two notebooks on production code
+(`notebooks/phase5/`). Without a single label, NannyML CBPE reads XGBoost's 2019 drop
+(true −24%, estimated −18%) and GraphSAGE's stability (−2% / −2%), flagging XGBoost **89
+days** before delayed chargebacks could. Exact explanations for both models: XGBoost's
+false positives are almost all `Chip = Online`; GraphSAGE's top alerts are driven by
+velocity and the transaction, not the graph. Monitoring runs in `.venv-monitoring`
+(decision 24).
+
 **Phase 4 closed (2026-10-03).** Latency measured with Supabase in the loop: 427 ms from
 this Studio, 96% of it the 68 ms transatlantic round trip. Cutting 6 database round trips to
 2 brings it to 151 ms here and a projected **14 ms p50 / 17 ms p95** beside the database. The
@@ -74,7 +82,9 @@ subgraph, p50 5.4ms / p95 13.0ms in-process (the database is measured in Phase 4
 | Causal replay | **Done** -- 1,723,938 rows of 2019, AUC-PR **0.4665**, P@100 0.710 |
 | Latency replay | **Done** -- `replay.py --http`, 3,000 requests, scores equal to the in-memory replay on all 3,000 |
 | Foundation model | **Measured, not registered** -- best head 0.2215, MLflow run `fm-phase3.5-experiment` |
-| Tests | **271 passing** across 16 files |
+| Monitoring | **Experiment done** -- `01_monitoring.ipynb`; CBPE + drift → `drift_metrics` rows (Parquet; Supabase write is opt-in) |
+| Explainability | **Experiment done** -- `02_explainability.ipynb`; exact TreeSHAP reason codes + GraphSAGE group Shapley |
+| Tests | **292 passing** in `.venv` across 19 files, **11** under `.venv-monitoring` |
 
 Measured dataset facts now live in `docs/ARCHITECTURE.md` section 2.1. Read that before
 writing any feature code -- several of them contradict what the scaffolding assumed.
@@ -192,6 +202,22 @@ These were settled deliberately. Reopen only if new evidence appears.
    two weeks. Caught only because the HTTP replay compares served scores with the causal
    replay row for row. v3 (epoch 19) is now `@challenger`; v2 is kept. `registry_gnn.py`
    tags each version with the `evaluated_model` it was logged from.
+24. **Monitoring runs in its own environment, `.venv-monitoring`.** NannyML 0.13 cannot
+   share `.venv`: its pins pull XGBoost 3.4.1 -> 2.1.4 or numpy/pandas/pyarrow down. Our
+   package is installed there `--no-deps`; `fraud.monitoring` never imports xgboost or
+   torch (tested) -- it reads scores, never models. Explainability stays in `.venv`. This
+   is also the production shape: monitoring is a job container, not part of the API image.
+25. **Label-free degradation is judged against the reference LEVEL, and must persist.**
+   NannyML's ±3σ band over reference months never fires here: ~200 frauds a month makes
+   monthly AUC-PR too noisy (XGBoost's lower threshold is 0). `flag_degradation` flags an
+   estimate more than `degradation_tolerance` (15%) below the 2018 level. Single-month flags
+   happen for the stable model too, so alerting needs persistence (consecutive months or
+   quarterly chunks). CBPE flagged XGBoost on 7/10 months, GraphSAGE on 1/10.
+26. **Explanations are exact or they are not shipped.** TreeSHAP via `pred_contribs`
+   (verified equal to the `shap` library), folded to source fields; GraphSAGE gets exact
+   Shapley over five groups (32 forward passes), each group removed along a path the model
+   already knows. Tests assert efficiency and that the full coalition equals the served
+   score -- an explanation of a different input than the one scored is worse than none.
 
 ## Conventions
 
@@ -293,6 +319,15 @@ These were settled deliberately. Reopen only if new evidence appears.
   test needs `psycopg_pool` first, or concurrent requests interleave on one session.
 - **Seed the latency replay only through `seed_rows()`.** It is the one selection both the
   in-memory and the HTTP replay start from; any other seeding breaks the score check.
+- **Never install `.[monitoring]` (NannyML) into `.venv`.** It silently downgrades
+  XGBoost or numpy/pandas/pyarrow under the whole pipeline. Use `.venv-monitoring`, and
+  note NannyML imports `statsmodels` without declaring it.
+- **`.venv-monitoring` is a symlink on Lightning**, so `.gitignore` must name it without a
+  trailing slash -- `dir/` never matches a symlink and git would offer to commit it.
+- **TabFormer has zero fraud after October 2019.** Nov 2019 - Feb 2020 carry no positives,
+  so realized metrics are undefined there while label-free estimates are not -- CBPE keeps
+  estimating 0.27-0.38. A change in the label distribution is invisible in the scores.
+- **Monthly AUC-PR at ~200 frauds swings ±0.1 on noise alone.** Never alert on one month.
 - **`source .venv/bin/activate` does NOT change which `python` runs.** The shell profile
   activates conda and zsh caches the lookup, so a bare `python` silently stays on
   `/home/zeus/miniconda3/envs/cloudspace/bin/python` even though `which python` says
@@ -312,7 +347,8 @@ These were settled deliberately. Reopen only if new evidence appears.
 
 ```bash
 uv venv --python 3.12
-uv pip install --python .venv/bin/python -e ".[dev]"   # add api,gnn,monitoring per phase
+uv pip install --python .venv/bin/python -e ".[dev]"   # add api,gnn,notebook per phase
+# NannyML lives apart -- see pyproject.toml's `monitoring` extra for the recipe.
 
 # Always invoke the venv explicitly -- activate is not enough here (see gotchas).
 .venv/bin/python -m pytest                         # tests
@@ -321,6 +357,9 @@ uv pip install --python .venv/bin/python -e ".[dev]"   # add api,gnn,monitoring 
 .venv/bin/dvc repro                                # the pipeline: ingest/validate/split/sample
 .venv/bin/dvc dag                                  # show the DAG
 .venv/bin/python scripts/verify_services.py        # DagsHub + Supabase, 11 checks
+.venv-monitoring/bin/python -m pytest tests/test_monitoring.py   # NannyML-backed tests
+# Notebooks: kernels `fraud` (.venv) and `fraud-monitoring` (.venv-monitoring)
+.venv/bin/jupyter nbconvert --to notebook --execute --inplace notebooks/phase5/01_monitoring.ipynb
 ```
 
 GPU is needed only for Phase 3. Run other phases on a CPU machine to conserve credits.

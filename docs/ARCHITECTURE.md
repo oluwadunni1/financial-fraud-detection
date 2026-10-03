@@ -2,7 +2,7 @@
 
 > The reference doc for this repo: system design, storage budget, phased build plan,
 > verification strategy. Section 6 has the phases; section 10 is the Lightning AI setup.
-> Last updated: 2026-10-03 (Phase 4 closed -- latency measured with the database in the loop)
+> Last updated: 2026-10-03 (Phase 5 first half -- label-free monitoring and exact explanations)
 
 ---
 
@@ -845,13 +845,66 @@ diff 6e-08, float32 storage). The full 2019 replay was re-run with the tie fix: 
 Out of scope here: concurrency. The API holds one shared connection, fine for sequential
 requests, but the Phase 6 load test needs a `psycopg_pool` first.
 
-### Phase 5 — Monitoring
-- [ ] `refresh_embeddings.py` — watermarked incremental job
-- [ ] Label simulator: reveal ground truth on a delay (simulated chargebacks)
-- [ ] NannyML CBPE + multivariate drift → `drift_metrics`
+### Phase 5 — Monitoring and explainability — **first half DONE (2026-10-03)**
+
+Run as notebook experiments on production code: `notebooks/phase5/*.ipynb` (committed
+executed, smoke-tested in sample mode by `tests/test_notebooks.py`) call
+`src/fraud/monitoring/` and `src/fraud/explain/`, so the scheduled job in Phase 6 runs
+exactly what the notebooks show.
+
+- [x] Label simulator: `monitoring/labels.py` -- fraud labels after a lognormal chargeback
+      delay (median 45 d, clipped 7-120), legitimate rows confirmed when the 90-day dispute
+      window closes. A month is label-complete (99%) ~90 days after it ends.
+- [x] NannyML CBPE + univariate (Jensen-Shannon) + multivariate (PCA reconstruction) drift
+      → `drift_metrics` rows (`monitoring/sink.py`; `sql/004_monitoring.sql` adds `model`)
+- [x] **Degradation shows up as an estimated-performance drop** -- on the real 2019
+      degradation, not an artificial one
+- [x] SHAP reason codes for XGBoost; exact group Shapley for GraphSAGE
+- [ ] `refresh_embeddings.py` -- moot for GraphSAGE now that it scores live history (decision 3)
 - [ ] Freshness SLI: `max(now - computed_at)`
 - [ ] **Staleness experiment** (see §6.2)
-- **Done when:** artificially drifted traffic shows up as a NannyML estimated-perf drop.
+
+**Two environments.** NannyML 0.13 cannot share `.venv`: its pins either pull XGBoost
+3.4.1 → 2.1.4 (the boosters were not saved with it) or numpy/pandas/pyarrow down. It lives
+in `.venv-monitoring` with this package installed `--no-deps`; `fraud.monitoring` never
+imports xgboost or torch (tested). Explainability stays in `.venv`. The split is the
+production shape too: monitoring is a job container, separate from the API image.
+
+**Monitoring results** (`01_monitoring.ipynb`, reference 2018, analysis 2019, monthly):
+
+| | 2018 level | true 2019 | **CBPE 2019 (no labels)** | months flagged, CBPE / true |
+|---|---|---|---|---|
+| XGBoost | 0.389 | 0.297 (−24%) | **0.319 (−18%)** | 7/10 / 7/10 |
+| GraphSAGE | 0.515 | 0.504 (−2%) | **0.503 (−2%)** | 1/10 / 3/10 |
+
+(Monthly-mean AUC-PR; the "−45%" elsewhere is pooled full-year AUC-PR.) CBPE flags
+XGBoost on **31 Jan 2019**; labels could confirm it on 1 May -- **89 days** sooner -- and
+it reads GraphSAGE correctly as stable. Three things the run established:
+
+1. **NannyML's own alerts never fire.** Its band is ±3σ of the reference *months*, and with
+   ~200 frauds a month AUC-PR noise makes the band absurd (XGBoost's lower threshold is 0).
+   `flag_degradation` compares the estimate with the reference level instead
+   (`monitoring.degradation_tolerance`, 15%). A production rule should also require
+   persistence: single-month flags occur for the stable model too.
+2. **The estimate cannot see fraud stop.** TabFormer has **zero fraud after October 2019**;
+   CBPE still estimates 0.27-0.38 for Nov-Dec. Label-free estimation covers covariate
+   shift; prior and concept shift still need the delayed labels.
+3. Inputs drifted on `Amount`, `State`, `Time`, `velocity_seconds_since_last`.
+
+**Explainability results** (`02_explainability.ipynb`, top true and false positives of each
+model, 36 transactions):
+
+- **XGBoost:** exact TreeSHAP (`pred_contribs`), equal to the `shap` library's to 0.0, sums
+  to the margin within 1e-5; folded from 86 encoded columns to 24 source fields. **Every
+  top false positive is an online transaction** -- `Chip = Online` adds +2-3 log-odds --
+  while true positives are driven by location (`Zip`, `MCC`, `City`) and 24 h velocity.
+- **GraphSAGE:** exact Shapley over five groups (transaction, velocity, card history,
+  merchant history, identity), 32 forward passes, ~0.2 s per alert. Efficiency to 4e-15;
+  the full coalition reproduces the served score to 8e-08. "Absent" is always a path the
+  model knows (empty history, unseen ids, a typical 2018 transaction). In its top alerts the
+  push comes from **velocity (47%) and the transaction (41%)**; the graph groups add 12%
+  combined. These alerts are saturated near 1.0 -- where the neighbourhood earns the 2x is
+  a question for mid-score transactions, and the next explainability experiment.
 
 ### Phase 6 — CI/CD, model swapping & deploy
 

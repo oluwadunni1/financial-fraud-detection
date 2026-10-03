@@ -30,6 +30,8 @@ __pycache__
 notebooks/*.json
 # --- MLOps platform ---
 .venv/
+# The monitoring env (NannyML conflicts with .venv -- see pyproject.toml).
+.venv-monitoring
 .env
 *.egg-info/
 data/interim/
