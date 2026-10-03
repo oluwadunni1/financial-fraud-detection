@@ -6,34 +6,34 @@
   "model_version": "gnn-local-epoch19",
   "seeded_rows": -1,
   "rows": 1723938,
-  "seconds": 3127.8,
-  "throughput_per_s": 551.2,
+  "seconds": 2908.2,
+  "throughput_per_s": 592.8,
   "cold_start_user": 58,
   "cold_start_merchant": 29706,
   "latency_ms": {
-    "p50": 5.330678999598604,
-    "p95": 12.942717452824581,
-    "p99": 21.487868935655566
+    "p50": 4.863061999913043,
+    "p95": 11.905228349769455,
+    "p99": 20.160200590016746
   },
   "metrics": {
     "rows": 1723938,
     "positives": 2087,
     "base_rate": 0.0012106003812202063,
-    "auc_pr": 0.4666552936322424,
-    "auc_roc": 0.9964672452286005,
+    "auc_pr": 0.4664956962718998,
+    "auc_roc": 0.9964602239460971,
     "threshold": 0.7107857465744019,
     "precision_at_100": 0.71,
     "recall_at_100": 0.0340201245807379,
     "precision_at_1000": 0.649,
     "recall_at_1000": 0.3109726880689986,
     "confusion": {
-      "tp": 1945,
+      "tp": 1943,
       "fp": 17112,
       "tn": 1704739,
-      "fn": 142
+      "fn": 144
     },
-    "precision_at_threshold": 0.10206223434958284,
-    "recall_at_fpr_0.01": 0.9319597508385242,
+    "precision_at_threshold": 0.10196798740488061,
+    "recall_at_fpr_0.01": 0.9310014374700527,
     "actual_fpr": 0.009938142150511281
   }
 }

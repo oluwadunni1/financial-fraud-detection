@@ -42,16 +42,22 @@ phases; section 10 is the Lightning AI setup.
 
 ## Current state (update as phases complete)
 
+**Phase 4 closed (2026-10-03).** Latency measured with Supabase in the loop: 427 ms from
+this Studio, 96% of it the 68 ms transatlantic round trip. Cutting 6 database round trips to
+2 brings it to 151 ms here and a projected **14 ms p50 / 17 ms p95** beside the database. The
+run also found the API serving a model nobody evaluated (decision 23) and a neighbour bug in
+the in-memory replay; the restated headline is **0.4665**.
+
 **Phase 3.5 complete (2026-10-01).** The foundation model is measured and logged to MLflow
 but **not registered**: NVIDIA's own extraction (each transaction alone) adds +23% over a
 same-rows base (0.1797 -> **0.2215**), still below the champion and half of GraphSAGE. Our
 in-sequence extraction scores at chance -- see decision 21.
 
 **Phase 4 complete (2026-09-19).** The causal replay settled the question Phase 3 could
-not: GraphSAGE served honestly scores **0.4667** AUC-PR on 2019 against the offline
+not: GraphSAGE served honestly scores **0.4665** AUC-PR on 2019 against the offline
 **0.5614** and the XGBoost champion's **0.2501**. The offline number was ~17% optimistic,
 not fake -- measured leakage is worth about 1%. Serving is FastAPI + a per-request
-subgraph, p50 5.4ms / p95 13.0ms, well inside the <100ms target.
+subgraph, p50 5.4ms / p95 13.0ms in-process (the database is measured in Phase 4's close-out above).
 
 | Scaffold (`pyproject.toml`, `params.yaml`, `src/fraud/`, `sql/`) | Done |
 | TabFormer data downloaded | **Yes** -- 24,386,900 rows, 2.35 GB, DVC-tracked |
@@ -64,10 +70,11 @@ subgraph, p50 5.4ms / p95 13.0ms, well inside the <100ms target.
 | Processed data | **Done** -- 30 year partitions, 538 MB Parquet (from 2.35 GB CSV) |
 | Features | **Done** -- 86 columns (69 encoded + 4 numeric + 13 velocity) |
 | Champion | **Registered** -- `models:/fraud-champion@champion`, AUC-PR 0.3190 |
-| Serving | **Done** -- FastAPI `/predict`, per-request subgraph, p50 5.4ms / p95 13.0ms |
-| Causal replay | **Done** -- 1,723,938 rows of 2019, AUC-PR **0.4667**, P@100 0.710 |
+| Serving | **Done** -- FastAPI `/predict`, per-request subgraph, 2 DB round trips; projected 14 ms p50 / 17 ms p95 same-AZ |
+| Causal replay | **Done** -- 1,723,938 rows of 2019, AUC-PR **0.4665**, P@100 0.710 |
+| Latency replay | **Done** -- `replay.py --http`, 3,000 requests, scores equal to the in-memory replay on all 3,000 |
 | Foundation model | **Measured, not registered** -- best head 0.2215, MLflow run `fm-phase3.5-experiment` |
-| Tests | **260 passing** across 15 files |
+| Tests | **271 passing** across 16 files |
 
 Measured dataset facts now live in `docs/ARCHITECTURE.md` section 2.1. Read that before
 writing any feature code -- several of them contradict what the scaffolding assumed.
@@ -89,7 +96,7 @@ These were settled deliberately. Reopen only if new evidence appears.
    `transaction_events` already carries `idx_txe_user_ts` / `idx_txe_merchant_ts` -- the
    exact two lookups needed, already there for velocity. Cost: torch in the API image
    (~200 MB CPU wheel) and a latency budget that must be re-measured against the <100ms
-   target.
+   target. **Measured 2026-10-03:** 14 ms p50 / 17 ms p95 projected same-AZ (decision 22).
 4. **Supabase is a rolling hot store, not an archive.** The full 24.4M-row history stays
    in DVC-tracked Parquet (`data/processed/`, 538 MB). Free tier is 500 MB; the full table
    plus indexes measures ~6.2 GB, 12.4x over.
@@ -151,8 +158,8 @@ These were settled deliberately. Reopen only if new evidence appears.
    embeddings at all* (0.2113). Section 3.1's precomputed-embedding serving design cannot
    deliver the 2x, so Phase 4 must resolve how to serve the GNN before it can be promoted.
 18. **The causal replay is the number we report, not the offline one.** Offline 0.5614
-   vs served 0.4667 on 2019. The gap is NOT leakage -- letting the graph see the future
-   is worth ~1%. It is that offline samples 10 neighbours spread across the card's whole
+   vs served 0.4665 on 2019 (0.4667 before the same-minute neighbour fix, see gotchas).
+   The gap is NOT leakage -- letting the graph see the future is worth ~1%. It is that offline samples 10 neighbours spread across the card's whole
    period while serving takes the 10 most recent, which is what an indexed lookup can
    cheaply return. A defensible tradeoff, recorded rather than closed.
 19. **A sharded replay must be proven equal to the sequential one, not assumed.** The
@@ -173,6 +180,18 @@ These were settled deliberately. Reopen only if new evidence appears.
    Both arms are kept (`fm_embeddings`, `fm_embeddings_isolated`) so the comparison is
    reproducible. Never move the contextual read point to `<eos>`/`<sep>` after the
    transaction: which one appears depends on whether a later transaction exists.
+22. **Serving makes 2 database round trips, not 6.** One statement reads both histories;
+   one data-modifying CTE logs the prediction and inserts the row, in autocommit, so the
+   pair stays atomic (`serving.merged_round_trips`). Measured on the same 3,000 requests:
+   427 -> 151 ms from us-east-1, 19.9 -> 14.0 ms p50 projected same-AZ. Latency is reported
+   decomposed (network / Postgres / score / HTTP) from the `Server-Timing` header, because
+   from this Studio a single total measures the Atlantic, not the design.
+23. **The registered model must be the evaluated model -- check it by scores, not by name.**
+   `@challenger` v2 was GraphSAGE epoch 17; the model was retrained to epoch 19 36 minutes
+   later and every reported number came from that. The API served unevaluated weights for
+   two weeks. Caught only because the HTTP replay compares served scores with the causal
+   replay row for row. v3 (epoch 19) is now `@challenger`; v2 is kept. `registry_gnn.py`
+   tags each version with the `evaluated_model` it was logged from.
 
 ## Conventions
 
@@ -264,6 +283,16 @@ These were settled deliberately. Reopen only if new evidence appears.
   Time)` collides on 142,010 rows and 66 rows are exact duplicates. Anything that reorders
   or filters rows before ingest silently renumbers every transaction -- and `predictions`,
   `labels` and `transaction_events` all key on it.
+- **A `deque(maxlen=N)` evicts BEFORE the `ts < now` filter.** The in-memory replay's
+  merchant history did exactly that, so a same-minute row already added cost the model its
+  10th neighbour (Postgres's `ts < now ... limit 10` returned 10). 2.5% of 2019 rows moved;
+  AUC-PR 0.4667 -> 0.4665. Tied rows no longer count toward the cap on either side.
+- **psycopg outside autocommit sends `BEGIN` as its own round trip.** Invisible locally,
+  70 ms from this Studio. Count round trips from measurements, never from the code.
+- **The API holds one shared connection.** Fine for the sequential replay; the Phase 6 load
+  test needs `psycopg_pool` first, or concurrent requests interleave on one session.
+- **Seed the latency replay only through `seed_rows()`.** It is the one selection both the
+  in-memory and the HTTP replay start from; any other seeding breaks the score check.
 - **`source .venv/bin/activate` does NOT change which `python` runs.** The shell profile
   activates conda and zsh caches the lookup, so a bare `python` silently stays on
   `/home/zeus/miniconda3/envs/cloudspace/bin/python` even though `which python` says

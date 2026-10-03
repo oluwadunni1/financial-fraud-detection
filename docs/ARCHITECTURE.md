@@ -2,7 +2,7 @@
 
 > The reference doc for this repo: system design, storage budget, phased build plan,
 > verification strategy. Section 6 has the phases; section 10 is the Lightning AI setup.
-> Last updated: 2026-10-02 (Phase 3.5 complete -- foundation model measured, not registered)
+> Last updated: 2026-10-03 (Phase 4 closed -- latency measured with the database in the loop)
 
 ---
 
@@ -184,7 +184,7 @@ Both are dataset properties, not pipeline bugs. Name them in the README.
 > fetches a small neighbourhood per request and scores the graph directly.
 >
 > **What it is actually worth.** A strictly causal replay of all 1,723,938 transactions of
-> 2019 -- score, then insert, so nothing can see its own future -- gives **0.4667** AUC-PR,
+> 2019 -- score, then insert, so nothing can see its own future -- gives **0.4665** AUC-PR,
 > against the XGBoost champion's 0.2501. P@100 is 0.710 and recall at 1% FPR is 0.932.
 > Latency lands at **p50 5.4ms / p95 13.0ms / p99 21.1ms**, comfortably inside the <100ms
 > target, so the reversal's one open cost is settled.
@@ -753,7 +753,7 @@ overlaps most of our 2018 (LM loss only, no labels). **Test 2019 was never seen.
 
 Verdict: sequential structure, as this frozen model exposes it, is worth +23% over the
 same-rows base -- real, but the best FM head (0.2215) is below the champion (0.2501, which
-saw 20.6M rows) and half of GraphSAGE served (0.4667). Relational structure wins.
+saw 20.6M rows) and half of GraphSAGE served (0.4665). Relational structure wins.
 
 #### Why this is cheap to add
 Both approaches have an **identical serving contract**: precompute embeddings offline,
@@ -799,6 +799,51 @@ written out explicitly rather than derived.
 > **Reproducing the offline sampler is what made the diagnosis conclusive.** Rebuilding
 > `NeighborLoader`'s scheme by hand scored 0.6945 against the real 0.7015 on the same
 > slice, which validated the harness before it was used to attribute blame.
+
+### Phase 4 close-out — latency with the database in the loop — **DONE (2026-10-03)**
+
+`replay.py --http` sends a 3,000-transaction slice (from 2019-06-03) through the running
+API one request at a time, against Supabase seeded with exactly the history the in-memory
+replay saw (34,031 rows, 25 MB). Each response carries a `Server-Timing` header with every
+span's duration and its declared database round trips (`api/timing.py`); `jobs/latency.py`
+turns that into `reports/metrics_latency.json`.
+
+| per request, p50 (ms) | 6 round trips | 2 round trips |
+|---|---|---|
+| wall, measured from the Studio (us-east-1 → eu-west-1, RTT 68 ms) | 427.4 | **150.7** |
+| network (round trips × RTT) | 410.6 | 137.7 |
+| Postgres server time | 9.6 | 5.8 |
+| GraphSAGE score | 4.8 | 4.9 |
+| HTTP overhead | 2.2 | 2.2 |
+| **projected, API in the same AZ as the DB** (p50 / p95) | 19.9 / 21.9 | **14.0 / 16.6** |
+| projected, same region, cross-AZ (p50 / p95) | 28.9 / 30.9 | 17.0 / 19.6 |
+
+**96% of the measured time is the Atlantic.** Beside the database the design sits at ~14 ms
+p50, far inside the 100 ms budget; EXPLAIN ANALYZE puts the neighbourhood read itself at
+~1 ms p50. The projection is arithmetic on measured parts: wall − round trips × (measured
+RTT − target RTT).
+
+**Round trips cut from 6 to 2** (`serving.merged_round_trips: true`, now the default): one
+statement for both history reads, and one data-modifying CTE that logs the prediction and
+inserts the row, in autocommit, so it is still all-or-nothing. The count was 6, not the 5
+assumed: outside autocommit psycopg sends `BEGIN` as its own round trip.
+
+**The latency run was also a correctness check, and it found four defects:**
+
+| defect | how it showed | fix |
+|---|---|---|
+| `@challenger` v2 was GraphSAGE **epoch 17**; every reported number came from **epoch 19**, retrained 36 min after registration | HTTP scores matched the in-memory replay only when the replay used the registry model | epoch 19 registered as **v3**, `@challenger` moved; v2 kept |
+| the history SELECT never returned `mcc`, an encoder input | first request with a populated store failed in the subgraph guard | column added; test asserts reads cover every encoder input |
+| the in-memory replay's merchant `deque(maxlen=10)` evicted on append, before `ts < now` -- a same-minute row cost a neighbour (user side too) | 81 / 3,000 rows: Postgres returned 10 merchant neighbours, memory 9 | tied rows no longer count toward the cap; two regression tests that fail on the old code |
+| the API never pinned torch to one thread (decision 20) | read of the code while wiring the replay | `serving.torch_threads: 1` set at startup |
+
+After the fixes the HTTP path and the in-memory replay agree on **all 3,000 scores** (max
+diff 6e-08, float32 storage). The full 2019 replay was re-run with the tie fix: **AUC-PR
+0.4665** (was 0.4667), P@100 unchanged at 0.710, recall at 1% FPR 0.931 (was 0.932);
+2.5% of rows moved. The ensemble / combiner reports still reflect the pre-fix scores.
+
+Out of scope here: concurrency. The API holds one shared connection, fine for sequential
+requests, but the Phase 6 load test needs a `psycopg_pool` first.
 
 ### Phase 5 — Monitoring
 - [ ] `refresh_embeddings.py` — watermarked incremental job
@@ -884,7 +929,7 @@ Naming these reads stronger than letting a reviewer find them:
    0.5804 (10 recent) vs 0.6427 (10 spread) on a June 2019 slice. Sampling a card's full
    history per request would close it, at the cost of a much more expensive query --
    a fidelity/latency tradeoff we took deliberately, not a defect. It is the main reason
-   the served 0.4667 sits below the offline 0.5614.
+   the served 0.4665 sits below the offline 0.5614.
 7. **The models are reference implementations, not original work.** The graph approach is
    ported from the blueprint and the foundation model is a pretrained NVIDIA checkpoint
    used frozen. The original contribution is the platform: the pipeline, serving

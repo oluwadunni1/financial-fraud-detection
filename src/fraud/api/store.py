@@ -40,6 +40,7 @@ RAW_COLUMNS = (
 _DB_TO_CANONICAL = {
     "user_id": "User",
     "amount": "Amount",
+    "mcc": "MCC",
     "merchant": "Merchant",
     "state": "State",
     "city": "City",
@@ -79,7 +80,12 @@ def connection_string() -> str:
 
 
 def connect() -> psycopg.Connection:
-    return psycopg.connect(connection_string(), row_factory=dict_row)
+    # Session pinned to UTC: training timestamps are naive UTC, and a naive
+    # `now` parameter is interpreted in the session's zone. Leaving that to the
+    # server default would make `ts < now` depend on where the database lives.
+    return psycopg.connect(
+        connection_string(), row_factory=dict_row, options="-c TimeZone=UTC"
+    )
 
 
 def _to_frame(rows: list[dict[str, Any]]) -> pl.DataFrame:
@@ -96,16 +102,24 @@ def _to_frame(rows: list[dict[str, Any]]) -> pl.DataFrame:
                 "merchant_id": pl.Int64,
                 **{c: pl.Float64 for c in velocity_columns([1, 24, 168])},
                 **{c: pl.String for c in ("City", "Errors", "Chip")},
-                **{c: pl.Int64 for c in ("Zip", "Time", "Month", "Day")},
+                **{c: pl.Int64 for c in ("Zip", "Time", "Month", "Day", "MCC")},
             }
         )
     # Canonical names here, not in the caller: subgraph.py and the predictor
     # should not need to know what the database columns are called.
-    return pl.DataFrame(rows).rename(_DB_TO_CANONICAL)
+    frame = pl.DataFrame(rows).rename(_DB_TO_CANONICAL)
+    # `timestamptz` comes back zone-aware; everything offline is naive UTC.
+    # Normalised once, here, so a comparison against the arriving transaction
+    # can never mix the two.
+    if getattr(frame.schema["ts"], "time_zone", None):
+        frame = frame.with_columns(
+            pl.col("ts").dt.convert_time_zone("UTC").dt.replace_time_zone(None)
+        )
+    return frame
 
 
 _HISTORY_COLUMNS = """
-    txn_id, user_id, ts, amount, merchant, state, merchant_id,
+    txn_id, user_id, ts, amount, mcc, merchant, state, merchant_id,
     city, zip, errors, chip, time_min, month, day,
     velocity_count_1h, velocity_amount_1h, velocity_merchants_1h,
     velocity_states_1h, velocity_count_24h, velocity_amount_24h,
@@ -128,22 +142,27 @@ _HISTORY_COLUMNS = """
 #             justification for the graph, only for velocity.
 #
 # Both arms ride idx_txe_user_ts, and both are bounded.
+#
+# `txn_id desc` breaks timestamp ties. subgraph.py keeps the first N rows, and
+# 142,010 rows share a user and a minute, so an unordered tie would let the
+# database pick different neighbours from the in-memory replay -- a different
+# score from the same history, with nothing to show for it.
 _USER_HISTORY_SQL = f"""
     (select {_HISTORY_COLUMNS}
        from transaction_events
       where user_id = %(key)s
         and ts < %(now)s          -- STRICTLY before. See the module docstring.
         and ts >= %(since)s       -- the velocity window
-      order by ts desc
+      order by ts desc, txn_id desc
       limit %(limit)s)
     union
     (select {_HISTORY_COLUMNS}
        from transaction_events
       where user_id = %(key)s
         and ts < %(now)s
-      order by ts desc
+      order by ts desc, txn_id desc
       limit %(graph_rows)s)
-    order by ts desc
+    order by ts desc, txn_id desc
 """
 
 # The merchant side feeds the graph only -- velocity reads user history alone --
@@ -154,7 +173,7 @@ _MERCHANT_HISTORY_SQL = f"""
       from transaction_events
      where merchant_id = %(key)s
        and ts < %(now)s
-     order by ts desc
+     order by ts desc, txn_id desc
      limit %(graph_rows)s
 """
 
@@ -207,6 +226,92 @@ def fetch_neighbourhood(
     )
 
 
+# The same two reads as one statement, for the one-round-trip serving path.
+# Each arm keeps its own placeholders (the user and merchant keys differ) and
+# its own order; `side` says which neighbourhood a row belongs to, and the
+# outer ORDER BY restores each side's order, because a subquery's ORDER BY does
+# not survive a UNION.
+_NEIGHBOURHOOD_SQL = f"""
+    select 'user' as side, u.* from (
+        {_USER_HISTORY_SQL.replace("%(key)s", "%(user)s")}
+    ) u
+    union all
+    select 'merchant' as side, m.* from (
+        {_MERCHANT_HISTORY_SQL.replace("%(key)s", "%(merchant)s")}
+    ) m
+    order by side desc, ts desc, txn_id desc
+"""
+
+
+def fetch_neighbourhood_once(
+    conn: psycopg.Connection,
+    user_id: int,
+    merchant_id: int,
+    now: dt.datetime,
+    history_hours: int,
+    graph_rows: int,
+) -> Neighbourhood:
+    """`fetch_neighbourhood` in one round trip instead of two.
+
+    Same predicates, same bounds, same order -- tests/test_latency.py holds
+    the two together on a fixture. Run on an autocommit connection, it also
+    avoids the BEGIN that a transactional connection sends first.
+    """
+    since = now - dt.timedelta(hours=history_hours)
+    with conn.cursor() as cur:
+        cur.execute(
+            _NEIGHBOURHOOD_SQL,
+            {
+                "user": user_id,
+                "merchant": merchant_id,
+                "now": now,
+                "since": since,
+                "limit": _HISTORY_ROW_CAP,
+                "graph_rows": graph_rows,
+            },
+        )
+        rows = cur.fetchall()
+    user_rows = [{k: v for k, v in r.items() if k != "side"}
+                 for r in rows if r["side"] == "user"]
+    merchant_rows = [{k: v for k, v in r.items() if k != "side"}
+                     for r in rows if r["side"] == "merchant"]
+    return Neighbourhood(
+        user_history=_to_frame(user_rows),
+        merchant_history=_to_frame(merchant_rows),
+    )
+
+
+def explain_fetch_ms(
+    conn: psycopg.Connection,
+    user_id: int,
+    merchant_id: int,
+    now: dt.datetime,
+    history_hours: int,
+    graph_rows: int,
+) -> float:
+    """Server-side execution time of one neighbourhood fetch, in ms.
+
+    The same statements `fetch_neighbourhood` issues, under EXPLAIN ANALYZE:
+    Postgres's own clock, with no network in it. The latency replay uses this
+    to cross-check what it derives by subtracting round trips from wall time.
+    """
+    since = now - dt.timedelta(hours=history_hours)
+    total = 0.0
+    with conn.cursor() as cur:
+        for sql, args in (
+            (_USER_HISTORY_SQL, {"key": user_id, "now": now, "since": since,
+                                 "limit": _HISTORY_ROW_CAP,
+                                 "graph_rows": graph_rows}),
+            (_MERCHANT_HISTORY_SQL, {"key": merchant_id, "now": now,
+                                     "graph_rows": graph_rows}),
+        ):
+            cur.execute(f"explain (analyze, format json) {sql}", args)
+            plan = cur.fetchone()["QUERY PLAN"][0]
+            total += float(plan["Execution Time"]) + float(plan["Planning Time"])
+    conn.rollback()
+    return total
+
+
 _INSERT_SQL = """
     insert into transaction_events (
         txn_id, user_id, merchant_id, ts, amount, mcc,
@@ -245,6 +350,65 @@ def insert_transaction(
         cur.execute(_INSERT_SQL, {**row, **velocity})
 
 
+# Columns a stored row carries, in the order _INSERT_SQL writes them. The bulk
+# loader reuses this list so a seeded row and a live insert cannot drift apart.
+STORED_COLUMNS = (
+    "txn_id", "user_id", "merchant_id", "ts", "amount", "mcc",
+    "merchant", "city", "state", "zip", "errors", "chip", "time_min", "month",
+    "day", *velocity_columns([1, 24, 168]),
+)
+
+
+def stored_row(row: dict[str, Any], velocity: dict[str, float]) -> dict[str, Any]:
+    """A transaction (canonical names) plus its velocity, as the table stores it."""
+    return {
+        "txn_id": row["txn_id"],
+        "user_id": row["User"],
+        "merchant_id": int(row["Merchant"]),
+        "ts": row["ts"],
+        "amount": row["Amount"],
+        "mcc": row["MCC"],
+        "merchant": row["Merchant"],
+        "city": row["City"],
+        "state": row["State"],
+        "zip": row["Zip"],
+        "errors": row["Errors"],
+        "chip": row["Chip"],
+        "time_min": row["Time"],
+        "month": row["Month"],
+        "day": row["Day"],
+        **velocity,
+    }
+
+
+def reset_store(conn: psycopg.Connection) -> None:
+    """Empty the hot store. Only the latency replay calls this, behind a flag.
+
+    The store must hold nothing at or after the replay cursor, and a previous
+    run leaves exactly that behind.
+    """
+    with conn.cursor() as cur:
+        cur.execute("truncate transaction_events, predictions")
+    conn.commit()
+
+
+def bulk_load_history(
+    conn: psycopg.Connection, rows: list[dict[str, Any]]
+) -> int:
+    """Seed the store with prior history in one COPY stream.
+
+    `rows` are `stored_row()` dicts. One COPY rather than one INSERT each: from
+    a Studio ~70 ms away, 40k inserts would take most of an hour.
+    """
+    columns = ", ".join(STORED_COLUMNS)
+    sql = f"copy transaction_events ({columns}) from stdin"
+    with conn.cursor() as cur, cur.copy(sql) as copy:
+        for row in rows:
+            copy.write_row(tuple(row[c] for c in STORED_COLUMNS))
+    conn.commit()
+    return len(rows)
+
+
 def assert_causal(conn: psycopg.Connection, cursor_ts: dt.datetime) -> int:
     """Fail loudly if the store holds anything at or after the replay cursor.
 
@@ -260,17 +424,43 @@ def assert_causal(conn: psycopg.Connection, cursor_ts: dt.datetime) -> int:
 
 def log_prediction(conn: psycopg.Connection, prediction: dict[str, Any]) -> None:
     with conn.cursor() as cur:
-        cur.execute(
-            """
-            insert into predictions (
-                txn_id, score, decision, model_version, latency_ms,
-                embedding_age_seconds, cold_start_user, cold_start_merchant
-            ) values (
-                %(txn_id)s, %(score)s, %(decision)s, %(model_version)s,
-                %(latency_ms)s, %(embedding_age_seconds)s,
-                %(cold_start_user)s, %(cold_start_merchant)s
-            )
-            on conflict (txn_id) do nothing
-            """,
-            prediction,
-        )
+        cur.execute(_LOG_PREDICTION_SQL, prediction)
+
+
+_LOG_PREDICTION_SQL = """
+    insert into predictions (
+        txn_id, score, decision, model_version, latency_ms,
+        embedding_age_seconds, cold_start_user, cold_start_merchant
+    ) values (
+        %(txn_id)s, %(score)s, %(decision)s, %(model_version)s,
+        %(latency_ms)s, %(embedding_age_seconds)s,
+        %(cold_start_user)s, %(cold_start_merchant)s
+    )
+    on conflict (txn_id) do nothing
+"""
+
+# Log and insert as ONE statement: a data-modifying CTE runs whether or not its
+# result is used, and a single statement in autocommit is its own transaction,
+# so the pair is still all-or-nothing -- in one round trip instead of three
+# (log, insert, commit).
+_LOG_AND_INSERT_SQL = f"""
+    with logged as ({_LOG_PREDICTION_SQL})
+    {_INSERT_SQL}
+"""
+
+
+def log_and_insert(
+    conn: psycopg.Connection,
+    prediction: dict[str, Any],
+    row: dict[str, Any],
+    velocity: dict[str, float],
+) -> None:
+    """`log_prediction` + `insert_transaction` + commit, in one round trip.
+
+    Still strictly after scoring: the row becomes visible to the next request,
+    never to its own. `conn` must be in autocommit.
+    """
+    if not conn.autocommit:
+        raise RuntimeError("log_and_insert needs an autocommit connection")
+    with conn.cursor() as cur:
+        cur.execute(_LOG_AND_INSERT_SQL, {**row, **velocity, **prediction})

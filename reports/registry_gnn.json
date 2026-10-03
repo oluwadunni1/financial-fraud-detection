@@ -1,10 +1,11 @@
 {
-  "run_id": "208e80f5ba834c7dbefbde8149d6641d",
+  "run_id": "8afd8505b4c049c897c783539d4007ff",
   "registered_model": "fraud-champion",
-  "version": "2",
+  "version": "3",
   "alias": "challenger",
   "model_uri": "models:/fraud-champion@challenger",
-  "challenger_auc_pr": 0.6474001664740605,
+  "challenger_auc_pr": 0.5614266371157124,
   "champion_version": "1",
-  "promotion": "deferred -- serving path cannot run this model yet"
+  "evaluated_model": "gnn-local-epoch19",
+  "promotion": "not decided -- @champion unchanged"
 }

@@ -111,12 +111,17 @@ def register(
 
         mlflow.log_dict(direct, "metrics_gnn_direct.json")
         mlflow.log_dict(ablation, "metrics_gnn_ablation.json")
-        mlflow.set_tag(
-            "promotion_blocked",
-            "Beats champion 2x end to end, but embeddings-as-features scores "
-            "0.1351 vs a 0.2113 base -- ARCHITECTURE 3.1's serving design cannot "
-            "deliver it. Phase 4 must serve the graph end to end first.",
-        )
+        # The weights logged here must be the weights the reports were measured
+        # on. v2 was registered from epoch 17 and the model was retrained to
+        # epoch 19 half an hour later, so the API served a model nobody had
+        # evaluated until the HTTP latency replay compared scores row for row.
+        mlflow.set_tags({
+            "evaluated_model": f"gnn-local-epoch{info['best_epoch']}",
+            "promotion": (
+                "Served end to end since Phase 4 (causal replay 0.4667 vs "
+                "champion 0.2501). Promotion to @champion is a separate decision."
+            ),
+        })
         # pickle, not MLflow 3's default "pt2": that format traces the graph by
         # executing forward with a tensor example, and this model's forward takes
         # dicts keyed by node and edge type, which cannot be expressed that way.
@@ -146,7 +151,8 @@ def register(
         "model_uri": f"models:/{name}@{ALIAS}",
         "challenger_auc_pr": headline["auc_pr"],
         "champion_version": str(champion.version),
-        "promotion": "deferred -- serving path cannot run this model yet",
+        "evaluated_model": f"gnn-local-epoch{info['best_epoch']}",
+        "promotion": "not decided -- @champion unchanged",
     }
 
 

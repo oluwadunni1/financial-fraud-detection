@@ -200,3 +200,32 @@ def test_all_rows_tied_collapses_to_one_shard():
     """Nothing can be split, so asking for 4 shards must still be correct."""
     frame = frame_with_ties([20])
     assert shard_boundaries(frame, 4) == [(0, 20)]
+
+
+def test_a_same_minute_row_does_not_cost_a_merchant_neighbour():
+    """The bug the HTTP latency replay found. With `deque(maxlen=10)`, a
+    same-minute transaction at the merchant evicted the 10th strictly-earlier
+    row on append and was then filtered out itself, so the model saw 9
+    neighbours where Postgres's `ts < now ... limit 10` returns 10."""
+    history = CausalHistory(window_hours=168, merchant_cap=10)
+    base = dt.datetime(2019, 6, 3, 6, 0)
+    for i in range(10):
+        history.add(txn(i, user=100 + i, ts=base + dt.timedelta(minutes=i)), {})
+    now = base + dt.timedelta(minutes=30)
+    history.add(txn(50, user=200, ts=now), {})       # scored earlier this minute
+    seen = history.neighbourhood(txn(51, user=201, ts=now)).merchant_history
+    assert seen.height == 10
+    assert 50 not in seen["txn_id"].to_list()        # its twin stays invisible
+
+
+def test_a_same_minute_row_does_not_cost_a_user_neighbour():
+    """Same flaw on the card side: a quiet card's pruning counted the
+    invisible same-minute row toward its 10 graph neighbours."""
+    history = CausalHistory(window_hours=1, merchant_cap=10)
+    base = dt.datetime(2019, 1, 1)
+    for i in range(10):
+        history.add(txn(i, user=7, ts=base + dt.timedelta(days=i)), {})
+    now = base + dt.timedelta(days=60)
+    history.add(txn(50, user=7, ts=now), {})
+    seen = history.neighbourhood(txn(51, user=7, ts=now)).user_history
+    assert sorted(seen["txn_id"].to_list()) == list(range(10))

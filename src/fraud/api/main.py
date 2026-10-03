@@ -20,11 +20,12 @@ import datetime as dt
 from contextlib import asynccontextmanager
 from typing import Any
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Response
 from pydantic import BaseModel, Field
 
 from fraud.api import store
 from fraud.api.predictor import Predictor
+from fraud.api.timing import Spans
 from fraud.config import load_params
 
 _state: dict[str, Any] = {}
@@ -86,9 +87,18 @@ async def lifespan(app: FastAPI):
     """Load the model once, at startup -- not per request."""
     params = load_params()
     _state["params"] = params
+    # One request is a ~21-node graph: parallelising it inside torch thrashes
+    # rather than helps (decision 20). Set before the model is loaded.
+    import torch
+
+    torch.set_num_threads(params["serving"]["torch_threads"])
     _state["predictor"] = Predictor.from_registry(params)
     _state["threshold"] = params["evaluate"]["target_false_positive_rate"]
     _state["conn"] = store.connect()
+    # One-round-trip mode reads and writes in autocommit: no BEGIN before the
+    # read, and the combined write is a single atomic statement.
+    _state["merged"] = bool(params["serving"]["merged_round_trips"])
+    _state["conn"].autocommit = _state["merged"]
     yield
     conn = _state.get("conn")
     if conn is not None:
@@ -120,65 +130,71 @@ def health() -> dict[str, Any]:
 
 
 @app.post("/predict", response_model=PredictionResponse)
-def predict(transaction: Transaction) -> PredictionResponse:
+def predict(transaction: Transaction, response: Response) -> PredictionResponse:
     predictor: Predictor = _state["predictor"]
     params = _state["params"]
     conn = _state["conn"]
     features = transaction.to_features()
+    # Training timestamps are naive UTC. An aware one from a client is folded
+    # to that, so `ts < now` compares like with like.
+    if features["ts"].tzinfo is not None:
+        features["ts"] = features["ts"].astimezone(dt.UTC).replace(tzinfo=None)
+
+    # Each span is timed so the response can say where the time went; see
+    # fraud.api.timing for why a total alone is not enough.
+    spans = Spans()
+
+    history_args = {
+        "user_id": features["User"],
+        "merchant_id": int(features["Merchant"]),
+        "now": features["ts"],
+        "history_hours": params["serving"]["history_hours"],
+        "graph_rows": params["serving"]["neighbours"],
+    }
+    merged = _state["merged"]
 
     # 1-2. Everything strictly before this transaction. Bounded by time, not
     #      row count -- velocity counts a window and truncation would skew it.
-    neighbourhood = store.fetch_neighbourhood(
-        conn,
-        user_id=features["User"],
-        merchant_id=int(features["Merchant"]),
-        now=features["ts"],
-        history_hours=params["serving"]["history_hours"],
-        graph_rows=params["serving"]["neighbours"],
-    )
+    if merged:
+        with spans.span("fetch", round_trips=1):
+            neighbourhood = store.fetch_neighbourhood_once(conn, **history_args)
+    else:
+        # Three round trips, not two: outside autocommit psycopg sends BEGIN
+        # on its own before the first statement. Measured, not assumed -- the
+        # first latency replay found `fetch` at 3x the network RTT.
+        with spans.span("fetch", round_trips=3):
+            neighbourhood = store.fetch_neighbourhood(conn, **history_args)
 
     # 3. Score.
-    prediction = predictor.score(features, neighbourhood)
-    decision = prediction.score >= _state["threshold"]
+    with spans.span("score"):
+        prediction = predictor.score(features, neighbourhood)
+        decision = prediction.score >= _state["threshold"]
 
     # 4. Log, then 5. make visible. Order matters: a row inserted before
     #    scoring would be visible to its own prediction.
-    store.log_prediction(
-        conn,
-        {
-            "txn_id": features["txn_id"],
-            "score": prediction.score,
-            "decision": decision,
-            "model_version": prediction.model_version,
-            "latency_ms": prediction.latency_ms,
-            "embedding_age_seconds": None,
-            "cold_start_user": prediction.cold_start_user,
-            "cold_start_merchant": prediction.cold_start_merchant,
-        },
-    )
-    store.insert_transaction(
-        conn,
-        {
-            "txn_id": features["txn_id"],
-            "user_id": features["User"],
-            "merchant_id": int(features["Merchant"]),
-            "ts": features["ts"],
-            "amount": features["Amount"],
-            "mcc": features["MCC"],
-            "merchant": features["Merchant"],
-            "city": features["City"],
-            "state": features["State"],
-            "zip": features["Zip"],
-            "errors": features["Errors"],
-            "chip": features["Chip"],
-            "time_min": features["Time"],
-            "month": features["Month"],
-            "day": features["Day"],
-        },
-        prediction.velocity,
-    )
-    conn.commit()
+    logged = {
+        "txn_id": features["txn_id"],
+        "score": prediction.score,
+        "decision": decision,
+        "model_version": prediction.model_version,
+        "latency_ms": prediction.latency_ms,
+        "embedding_age_seconds": None,
+        "cold_start_user": prediction.cold_start_user,
+        "cold_start_merchant": prediction.cold_start_merchant,
+    }
+    row = store.stored_row(features, {})
+    if merged:
+        with spans.span("write", round_trips=1):
+            store.log_and_insert(conn, logged, row, prediction.velocity)
+    else:
+        with spans.span("log", round_trips=1):
+            store.log_prediction(conn, logged)
+        with spans.span("insert", round_trips=1):
+            store.insert_transaction(conn, row, prediction.velocity)
+        with spans.span("commit", round_trips=1):
+            conn.commit()
 
+    response.headers["Server-Timing"] = spans.header()
     return PredictionResponse(
         txn_id=features["txn_id"],
         score=prediction.score,

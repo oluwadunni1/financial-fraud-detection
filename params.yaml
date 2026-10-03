@@ -211,6 +211,25 @@ serving:
   # Rows older than the largest velocity window cannot affect any feature, so
   # there is nothing to gain by fetching them.
   history_hours: 168
+  # Decision 20: on ~21-node graphs torch's intra-op threads cost more than
+  # they save (threads=4 measured 10 rows/s against 178 at threads=1). The
+  # sharded replay applied this; the API did not, until the latency replay.
+  torch_threads: 1
+  # Database round trips per request. false: BEGIN + 2 reads, log, insert,
+  # commit = 6. true: one combined read and one combined write in autocommit
+  # = 2. Same rows, same order, same scores -- the latency replay checks it.
+  merged_round_trips: true
+  # The latency replay (`replay.py --http`): a contiguous slice sent through the
+  # running API one request at a time, against a seeded Supabase store.
+  latency:
+    start: "2019-06-03"
+    n: 3000
+    port: 8765
+    rtt_probes: 50        # `select 1` round trips timed for the network baseline
+    explain_samples: 20   # history reads re-run under EXPLAIN ANALYZE
+    # Round-trip times a deploy beside the database would see: same AZ, and
+    # across AZs in one region. The projection swaps these in for the measured RTT.
+    target_rtt_ms: [0.5, 2.0]
 
 evaluate:
   # Operating point for the fraud decision threshold.

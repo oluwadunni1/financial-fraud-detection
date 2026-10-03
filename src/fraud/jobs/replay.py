@@ -80,9 +80,26 @@ class CausalHistory:
         self._users: dict[int, collections.deque] = collections.defaultdict(
             collections.deque
         )
+        # Not a `deque(maxlen=cap)`: that evicts on append, BEFORE the
+        # `ts < now` filter, so a same-minute row already added pushed out the
+        # 10th strictly-earlier neighbour and the model saw 9. The HTTP latency
+        # replay found it -- Postgres's `ts < now ... limit 10` returned 10 on
+        # 81 of 3,000 rows where this returned 9. Rows tied with the newest
+        # timestamp now never count toward the cap; see `_prune`.
         self._merchants: dict[str, collections.deque] = collections.defaultdict(
-            lambda: collections.deque(maxlen=merchant_cap)
+            collections.deque
         )
+
+    @staticmethod
+    def _tied_tail(rows: collections.deque, ts: dt.datetime) -> int:
+        """How many rows at the right end have `ts >= ts` -- invisible to a
+        request at `ts`, so they must not use up its neighbour budget."""
+        n = 0
+        for row in reversed(rows):
+            if row["ts"] < ts:
+                break
+            n += 1
+        return n
 
     def neighbourhood(self, transaction: dict[str, Any]) -> Neighbourhood:
         now = transaction["ts"]
@@ -90,7 +107,10 @@ class CausalHistory:
         # Out of the velocity window AND no longer needed as a graph neighbour.
         # The second clause is what keeps a quiet card's older transactions
         # reachable; without it the graph sees nothing but the last week.
-        while len(rows) > self.merchant_cap and rows[0]["ts"] < now - self.window:
+        # Rows at or after `now` are invisible here, so they do not count
+        # toward the `merchant_cap` strictly-earlier rows the graph needs.
+        keep = self.merchant_cap + self._tied_tail(rows, now)
+        while len(rows) > keep and rows[0]["ts"] < now - self.window:
             rows.popleft()
 
         # `ts < now`, STRICTLY -- the same rule store.py applies in SQL.
@@ -104,7 +124,7 @@ class CausalHistory:
 
         merchant_rows = self._merchants.get(str(transaction["Merchant"]))
         merchant_visible = (
-            [r for r in reversed(merchant_rows) if r["ts"] < now]
+            [r for r in reversed(merchant_rows) if r["ts"] < now][: self.merchant_cap]
             if merchant_rows
             else []
         )
@@ -115,7 +135,13 @@ class CausalHistory:
         """Make a transaction visible -- called only after it was scored."""
         row = {**transaction, **velocity}
         self._users[transaction["User"]].append(row)
-        self._merchants[str(transaction["Merchant"])].append(row)
+        merchant = self._merchants[str(transaction["Merchant"])]
+        merchant.append(row)
+        # Bounded memory: no later request can see past the newest timestamp's
+        # ties, so `cap` rows before them are all a merchant ever needs.
+        keep = self.merchant_cap + self._tied_tail(merchant, row["ts"])
+        while len(merchant) > keep:
+            merchant.popleft()
 
 
 def replay_in_process(
@@ -211,24 +237,34 @@ def shard_boundaries(rows: pl.DataFrame, shards: int) -> list[tuple[int, int]]:
     return [(a, b) for a, b in zip(cuts[:-1], cuts[1:], strict=True) if b > a]
 
 
-def seed_history(
-    history: CausalHistory,
+def seed_rows(
     params: dict,
     start_ts: dt.datetime,
     hours: int,
     graph_since: dt.datetime | None = None,
-) -> int:
-    """Fill the store with the window immediately BEFORE the replay begins.
+    users: set[int] | None = None,
+    merchants: set[str] | None = None,
+) -> pl.DataFrame:
+    """The prior history a replay starting at `start_ts` should see, with velocity.
 
     In production the store is never empty: by the time a 2019 transaction
     arrives, the previous week is already there. Starting cold would make every
     early transaction a cold start and understate the model badly -- the 5,000
     row smoke test showed 27.6% cold-start users for exactly that reason.
 
-    Everything seeded is strictly before `start_ts`, so this adds context
-    without adding foresight. Their velocity values come from the offline
-    stage, which computed them over each row's own past -- the same numbers
-    scoring them live would have produced and written.
+    Everything selected is strictly before `start_ts`, so this adds context
+    without adding foresight. Velocity values come from the offline stage,
+    which computed them over each row's own past -- the same numbers scoring
+    them live would have produced and written.
+
+    One selection, two consumers: `seed_history` feeds it to the in-memory
+    replay and the HTTP replay COPYs it into Postgres, so both start from the
+    same past by construction.
+
+    `users` / `merchants` restrict the selection to the keys a replay slice
+    will actually look up. A request reads only its own card's and merchant's
+    rows, so the rest of the history can never reach a score -- and seeding it
+    all would not fit Supabase's free tier.
     """
     processed = repo_path(params["paths"]["processed"])
     velocity_dir = repo_path(params["paths"]["velocity"])
@@ -242,11 +278,14 @@ def seed_history(
     # replayed period. The offline test graph holds test-split rows only, so
     # seeding neighbours from before it would hand serving history the offline
     # measurement never had, and the comparison would flatter us.
-    graph_rows = history.merchant_cap
+    graph_rows = params["serving"]["neighbours"]
     prior = pl.scan_parquet(
         processed / "**/*.parquet", hive_partitioning=True
     ).filter(pl.col("ts") < start_ts)
+    # Velocity reads the card's window only; merchant history feeds the graph.
     window = prior.filter(pl.col("ts") >= since)
+    if users is not None:
+        window = window.filter(pl.col("User").is_in(list(users)))
 
     frames = [window]
     if graph_since is not None and graph_since < start_ts:
@@ -258,28 +297,49 @@ def seed_history(
             # group_by(...).tail() promotes the key to the first column, and
             # pl.concat matches schemas by position -- so reselect.
             columns = in_period.columns
+            user_tail = ordered.group_by("User").tail(graph_rows).select(columns)
+            merchant_tail = (
+                ordered.group_by("Merchant").tail(graph_rows).select(columns)
+            )
+            if users is not None:
+                user_tail = user_tail.filter(pl.col("User").is_in(list(users)))
+            if merchants is not None:
+                merchant_tail = merchant_tail.filter(
+                    pl.col("Merchant").cast(pl.String).is_in(list(merchants))
+                )
             frames = [
                 window.collect(engine="streaming").lazy(),
-                ordered.group_by("User").tail(graph_rows).select(columns).lazy(),
-                ordered.group_by("Merchant").tail(graph_rows).select(columns).lazy(),
+                user_tail.lazy(),
+                merchant_tail.lazy(),
             ]
 
     txns = pl.concat(frames).unique(subset=["txn_id"])
     vel = pl.scan_parquet(
         velocity_dir / "**/*.parquet", hive_partitioning=True
     ).drop("Year")
-    rows = (
+    return (
         txns.join(vel, on="txn_id", how="left")
         .collect(engine="streaming")
         .sort("ts", "txn_id")
     )
 
+
+def row_velocity(row: dict[str, Any], names: list[str]) -> dict[str, float]:
+    return {n: float(row[n] if row[n] is not None else 0.0) for n in names}
+
+
+def seed_history(
+    history: CausalHistory,
+    params: dict,
+    start_ts: dt.datetime,
+    hours: int,
+    graph_since: dt.datetime | None = None,
+) -> int:
+    """Fill the in-memory history with `seed_rows` -- see there for the rules."""
+    rows = seed_rows(params, start_ts, hours, graph_since=graph_since)
     names = velocity_columns(params["velocity"]["windows_hours"])
     for row in rows.iter_rows(named=True):
-        history.add(
-            transaction_from_row(row),
-            {n: float(row[n] if row[n] is not None else 0.0) for n in names},
-        )
+        history.add(transaction_from_row(row), row_velocity(row, names))
     return rows.height
 
 
@@ -368,6 +428,208 @@ def replay_sharded(
     }
 
 
+def http_slice(params: dict, limit: int | None) -> tuple[pl.DataFrame, dt.datetime]:
+    """The latency slice, and the graph bound the in-process replay used for it.
+
+    The bound is the first row of the slice's year minus one velocity window --
+    exactly where the (sharded or sequential) in-process 2019 replay's history
+    began. Seeding to the same bound is what lets the HTTP scores be checked
+    against `metrics_replay.npz` row for row.
+    """
+    cfg = params["serving"]["latency"]
+    start = dt.datetime.fromisoformat(cfg["start"])
+    processed = repo_path(params["paths"]["processed"])
+    scan = pl.scan_parquet(processed / "**/*.parquet", hive_partitioning=True)
+    rows = (
+        scan.filter(pl.col("ts") >= start)
+        .sort("ts", "txn_id")
+        .head(limit or cfg["n"])
+        .collect(engine="streaming")
+    )
+    year_start = (
+        scan.filter(pl.col("Year") == start.year)
+        .select(pl.col("ts").min())
+        .collect()
+        .item()
+    )
+    return rows, year_start - dt.timedelta(hours=params["serving"]["history_hours"])
+
+
+def _wait_for_health(client, timeout_s: float = 300.0) -> dict:
+    """The API downloads the model from DagsHub at startup; wait for it."""
+    import httpx
+
+    deadline = time.monotonic() + timeout_s
+    while time.monotonic() < deadline:
+        try:
+            response = client.get("/health")
+            if response.status_code == 200:
+                return response.json()
+        except httpx.TransportError:
+            pass
+        time.sleep(1.0)
+    raise RuntimeError(f"API not healthy after {timeout_s:.0f}s")
+
+
+def replay_http(params: dict, limit: int | None, reset: bool) -> dict:
+    """Send a slice through the running API, one request at a time.
+
+    Answers "what does this cost in production?" with the database in the loop,
+    and checks on the way that the database path scores exactly what the
+    in-memory replay did. Sequential on purpose: each request inserts its row
+    after scoring, so the order IS the causality control. Concurrency is the
+    load test's question, not this one's.
+    """
+    import subprocess
+
+    import httpx
+
+    from fraud.api import store
+    from fraud.api.timing import parse_server_timing
+    from fraud.config import REPO_ROOT
+    from fraud.jobs.latency import analyse, equivalence
+
+    cfg = params["serving"]["latency"]
+    hours = params["serving"]["history_hours"]
+    rows, graph_since = http_slice(params, limit)
+    cursor = rows["ts"].min()
+    print(f"slice: {rows.height:,} transactions from {cursor} "
+          f"({int(rows['Fraud'].sum())} frauds)")
+
+    # --- seed -------------------------------------------------------------
+    conn = store.connect()
+    with conn.cursor() as cur:
+        cur.execute("select count(*) as n from transaction_events")
+        existing = cur.fetchone()["n"]
+    if existing and not reset:
+        raise RuntimeError(
+            f"transaction_events holds {existing:,} rows from a previous run. "
+            f"Pass --reset-store: the store must contain only this slice's past."
+        )
+    if reset:
+        store.reset_store(conn)
+
+    users = set(rows["User"].to_list())
+    merchants = {str(m) for m in rows["Merchant"].to_list()}
+    seed = seed_rows(params, cursor, hours, graph_since, users, merchants)
+    names = velocity_columns(params["velocity"]["windows_hours"])
+    started = time.perf_counter()
+    seeded = store.bulk_load_history(
+        conn,
+        [store.stored_row(transaction_from_row(r), row_velocity(r, names))
+         for r in seed.iter_rows(named=True)],
+    )
+    print(f"seeded {seeded:,} rows for {len(users):,} cards / "
+          f"{len(merchants):,} merchants in {time.perf_counter() - started:.1f}s")
+    store.assert_causal(conn, cursor)
+
+    # --- network baseline -------------------------------------------------
+    probes = []
+    with conn.cursor() as cur:
+        for _ in range(cfg["rtt_probes"]):
+            t0 = time.perf_counter()
+            cur.execute("select 1")
+            cur.fetchone()
+            probes.append((time.perf_counter() - t0) * 1000.0)
+        cur.execute("select pg_database_size(current_database()) as b")
+        db_bytes = int(cur.fetchone()["b"])
+    conn.rollback()
+    rtt = float(np.median(probes))
+    print(f"network: select 1 median {rtt:.1f} ms; database {db_bytes / 1e6:.0f} MB")
+
+    # --- the API ----------------------------------------------------------
+    base = f"http://127.0.0.1:{cfg['port']}"
+    api = subprocess.Popen(
+        [sys.executable, "-m", "uvicorn", "fraud.api.main:app",
+         "--port", str(cfg["port"]), "--log-level", "warning"],
+        cwd=REPO_ROOT,
+    )
+    wall, scores, txn_ids, cold_user, cold_merchant = [], [], [], 0, 0
+    span_ms: dict[str, list[float]] = collections.defaultdict(list)
+    span_rt: dict[str, list[float]] = collections.defaultdict(list)
+    try:
+        with httpx.Client(base_url=base, timeout=60.0) as client:
+            health = _wait_for_health(client)
+            print(f"API up: {health['model_version']} (@{health['alias']})")
+            started = time.perf_counter()
+            for index, row in enumerate(rows.iter_rows(named=True)):
+                txn = transaction_from_row(row)
+                payload = {**txn, "ts": txn["ts"].isoformat()}
+                t0 = time.perf_counter()
+                response = client.post("/predict", json=payload)
+                wall.append((time.perf_counter() - t0) * 1000.0)
+                response.raise_for_status()
+                body = response.json()
+                for name, v in parse_server_timing(
+                    response.headers["server-timing"]
+                ).items():
+                    span_ms[name].append(v["dur"])
+                    span_rt[name].append(v["rt"])
+                scores.append(body["score"])
+                txn_ids.append(body["txn_id"])
+                cold_user += body["cold_start_user"]
+                cold_merchant += body["cold_start_merchant"]
+                if index and index % 500 == 0:
+                    rate = index / (time.perf_counter() - started)
+                    print(f"  {index:>6,} / {rows.height:,} ({rate:.1f}/s, "
+                          f"p50 so far {np.median(wall):.0f} ms)", flush=True)
+    finally:
+        api.terminate()
+        api.wait(timeout=30)
+    seconds = time.perf_counter() - started
+
+    # --- server-side query time, on Postgres's own clock -------------------
+    rng = np.random.default_rng(params["xgboost"]["random_state"])
+    sample = rng.choice(rows.height, size=min(cfg["explain_samples"], rows.height),
+                        replace=False)
+    explain = [
+        store.explain_fetch_ms(
+            conn, int(rows["User"][i]), int(rows["Merchant"][i]), rows["ts"][i],
+            hours, params["serving"]["neighbours"],
+        )
+        for i in sample.tolist()
+    ]
+    conn.close()
+
+    # --- does the database path score what the in-memory replay did? -----
+    reference = np.load(repo_path("reports/metrics_replay.npz"))
+    got = np.asarray(scores)
+    same = equivalence(txn_ids, got, reference["txn_id"], reference["score"])
+
+    analysis = analyse(
+        np.asarray(wall),
+        {k: np.asarray(v) for k, v in span_ms.items()},
+        {k: np.asarray(v) for k, v in span_rt.items()},
+        rtt,
+        cfg["target_rtt_ms"],
+    )
+    return {
+        "per_request": {"txn_id": np.asarray(txn_ids), "score": got,
+                        "wall_ms": np.asarray(wall)},
+        "mode": "http_sequential",
+        "slice": {"start": str(cursor), "rows": rows.height,
+                  "frauds": int(rows["Fraud"].sum())},
+        "model_version": health["model_version"],
+        "alias": health["alias"],
+        "seeded_rows": seeded,
+        "database_mb": round(db_bytes / 1e6, 1),
+        "rtt_probe_ms": percentiles_dict(probes),
+        "seconds": round(seconds, 1),
+        "throughput_per_s": round(rows.height / seconds, 2),
+        "cold_start_user": int(cold_user),
+        "cold_start_merchant": int(cold_merchant),
+        "latency": analysis,
+        "explain_fetch_ms": percentiles_dict(explain),
+        "equivalence_vs_in_process": same,
+    }
+
+
+def percentiles_dict(values) -> dict[str, float]:
+    from fraud.jobs.latency import percentiles
+
+    return percentiles(values)
+
+
 def main(argv: list[str] | None = None) -> int:
     params = load_params()
     ap = argparse.ArgumentParser(description=__doc__)
@@ -379,7 +641,45 @@ def main(argv: list[str] | None = None) -> int:
         "--shards", type=int, default=1,
         help="replay contiguous time ranges in parallel; results are identical",
     )
+    ap.add_argument(
+        "--http", action="store_true",
+        help="send serving.latency's slice through the API against Supabase",
+    )
+    ap.add_argument(
+        "--reset-store", action="store_true",
+        help="truncate transaction_events and predictions before seeding",
+    )
+    ap.add_argument("--label", default="separate",
+                    help="name for this --http run inside the latency report")
+    ap.add_argument("--latency-output", default="reports/metrics_latency.json")
     args = ap.parse_args(argv)
+
+    if args.http:
+        report = replay_http(params, args.limit, args.reset_store)
+        out = repo_path(args.latency_output)
+        # Per-request scores beside the summary, so equivalence can be
+        # re-checked against a later in-process replay without re-sending.
+        out.parent.mkdir(parents=True, exist_ok=True)
+        np.savez_compressed(
+            out.with_name(f"{out.stem}_{args.label}.npz"), **report.pop("per_request")
+        )
+        existing = json.loads(out.read_text()) if out.exists() else {"runs": {}}
+        existing["runs"][args.label] = report
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text(json.dumps(existing, indent=2, default=float))
+        lat = report["latency"]
+        eq = report["equivalence_vs_in_process"]
+        print(f"\n=== HTTP replay [{args.label}], {report['slice']['rows']:,} requests ===")
+        print(f"  wall p50/p95/p99   {lat['wall_ms']['p50']:.1f} / "
+              f"{lat['wall_ms']['p95']:.1f} / {lat['wall_ms']['p99']:.1f} ms")
+        for name, stats in lat["spans_ms"].items():
+            print(f"  {name:<8} p50 {stats['p50']:8.2f} ms")
+        for name, stats in lat["projected_same_region_ms"].items():
+            print(f"  projected {name}: p50 {stats['p50']:.1f} / p95 {stats['p95']:.1f} ms")
+        print(f"  equivalence: {eq['mismatches_over_tolerance']} of {eq['compared']} "
+              f"over {eq['tolerance']} (max diff {eq['max_abs_diff']:.2e})")
+        print(f"\n-> {out}")
+        return 0
 
     rows = load_split_rows(params, args.years, args.limit)
     print(
