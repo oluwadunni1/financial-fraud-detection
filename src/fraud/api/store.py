@@ -92,6 +92,46 @@ def connect() -> psycopg.Connection:
     )
 
 
+def pool(params: dict, autocommit: bool):
+    """A connection pool with the same session settings as `connect()`.
+
+    Every connection is UTC-pinned and dict-rowed; `autocommit` must match the
+    serving mode (merged round trips need it, decision 22).
+    """
+    from psycopg_pool import ConnectionPool
+
+    def configure(conn: psycopg.Connection) -> None:
+        conn.autocommit = autocommit
+
+    cfg = params["serving"]["pool"]
+    return ConnectionPool(
+        connection_string(),
+        min_size=cfg["min_size"], max_size=cfg["max_size"],
+        kwargs={"row_factory": dict_row, "options": "-c TimeZone=UTC"},
+        configure=configure, open=True,
+    )
+
+
+def record_shadow(conn: psycopg.Connection, txn_id: int, score: float,
+                  version: str, latency_ms: float) -> None:
+    """The challenger's score for a transaction the champion already decided.
+
+    Written after the response, into the columns sql/002_challenger.sql added
+    for exactly this. Never read by the request path.
+    """
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            update predictions
+               set challenger_score = %(score)s,
+                   challenger_version = %(version)s,
+                   challenger_latency_ms = %(latency)s
+             where txn_id = %(txn_id)s
+            """,
+            {"txn_id": txn_id, "score": score, "version": version, "latency": latency_ms},
+        )
+
+
 def _to_frame(rows: list[dict[str, Any]]) -> pl.DataFrame:
     """Rows as velocity expects them, with the column names it requires."""
     if not rows:

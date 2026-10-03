@@ -80,6 +80,16 @@ def register(
                 ],
             }
         )
+        # Which weights these are, checkable later (decision 23): v1 was the
+        # pre-velocity-fix model (0.3190) and stayed @champion after the honest
+        # 0.2501 retrain, because nothing compared the registry to the evaluation.
+        import hashlib
+
+        mlflow.set_tags({
+            "evaluated_model": f"xgb-local-best{info['best_iteration']}",
+            "weights_sha256": hashlib.sha256(
+                (model_dir / "model.json").read_bytes()).hexdigest(),
+        })
         # Headline metrics get unprefixed names so they sort to the top of a
         # registry comparison against the GNN and the foundation model.
         headline = report["splits"]["test_2019_only"]

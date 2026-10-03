@@ -509,7 +509,41 @@ def _wait_for_health(client, timeout_s: float = 300.0) -> dict:
     raise RuntimeError(f"API not healthy after {timeout_s:.0f}s")
 
 
-def replay_http(params: dict, limit: int | None, reset: bool) -> dict:
+def seed_store(params: dict, conn, rows: pl.DataFrame, graph_since: dt.datetime,
+               reset: bool) -> int:
+    """Put exactly the past `rows` will look up into the store, and prove it causal.
+
+    `seed_rows` restricted to the slice's cards and merchants -- the one
+    selection the in-memory replay also starts from -- COPYed in, then
+    `assert_store_is_causal` at the first row's timestamp.
+    """
+    from fraud.api import store
+
+    with conn.cursor() as cur:
+        cur.execute("select count(*) as n from transaction_events")
+        existing = cur.fetchone()["n"]
+    if existing and not reset:
+        raise RuntimeError(
+            f"transaction_events holds {existing:,} rows from a previous run. "
+            f"Pass --reset-store: the store must contain only this slice's past."
+        )
+    if reset:
+        store.reset_store(conn)
+    cursor = rows["ts"].min()
+    seed = seed_rows(params, cursor, params["serving"]["history_hours"], graph_since,
+                     set(rows["User"].to_list()), {str(m) for m in rows["Merchant"].to_list()})
+    names = velocity_columns(params["velocity"]["windows_hours"])
+    seeded = store.bulk_load_history(
+        conn,
+        [store.stored_row(transaction_from_row(r), row_velocity(r, names))
+         for r in seed.iter_rows(named=True)],
+    )
+    store.assert_causal(conn, cursor)
+    return seeded
+
+
+def replay_http(params: dict, limit: int | None, reset: bool,
+                api_url: str | None = None) -> dict:
     """Send a slice through the running API, one request at a time.
 
     Answers "what does this cost in production?" with the database in the loop,
@@ -536,30 +570,10 @@ def replay_http(params: dict, limit: int | None, reset: bool) -> dict:
 
     # --- seed -------------------------------------------------------------
     conn = store.connect()
-    with conn.cursor() as cur:
-        cur.execute("select count(*) as n from transaction_events")
-        existing = cur.fetchone()["n"]
-    if existing and not reset:
-        raise RuntimeError(
-            f"transaction_events holds {existing:,} rows from a previous run. "
-            f"Pass --reset-store: the store must contain only this slice's past."
-        )
-    if reset:
-        store.reset_store(conn)
-
+    seeded = seed_store(params, conn, rows, graph_since, reset)
     users = set(rows["User"].to_list())
     merchants = {str(m) for m in rows["Merchant"].to_list()}
-    seed = seed_rows(params, cursor, hours, graph_since, users, merchants)
-    names = velocity_columns(params["velocity"]["windows_hours"])
-    started = time.perf_counter()
-    seeded = store.bulk_load_history(
-        conn,
-        [store.stored_row(transaction_from_row(r), row_velocity(r, names))
-         for r in seed.iter_rows(named=True)],
-    )
-    print(f"seeded {seeded:,} rows for {len(users):,} cards / "
-          f"{len(merchants):,} merchants in {time.perf_counter() - started:.1f}s")
-    store.assert_causal(conn, cursor)
+    print(f"seeded {seeded:,} rows for {len(users):,} cards / {len(merchants):,} merchants")
 
     # --- network baseline -------------------------------------------------
     probes = []
@@ -576,8 +590,10 @@ def replay_http(params: dict, limit: int | None, reset: bool) -> dict:
     print(f"network: select 1 median {rtt:.1f} ms; database {db_bytes / 1e6:.0f} MB")
 
     # --- the API ----------------------------------------------------------
-    base = f"http://127.0.0.1:{cfg['port']}"
-    api = subprocess.Popen(
+    # Either an API already running (e.g. the Compose container, next to its
+    # own Postgres) or one started here from this checkout.
+    base = api_url or f"http://127.0.0.1:{cfg['port']}"
+    api = None if api_url else subprocess.Popen(
         [sys.executable, "-m", "uvicorn", "fraud.api.main:app",
          "--port", str(cfg["port"]), "--log-level", "warning"],
         cwd=REPO_ROOT,
@@ -612,8 +628,9 @@ def replay_http(params: dict, limit: int | None, reset: bool) -> dict:
                     print(f"  {index:>6,} / {rows.height:,} ({rate:.1f}/s, "
                           f"p50 so far {np.median(wall):.0f} ms)", flush=True)
     finally:
-        api.terminate()
-        api.wait(timeout=30)
+        if api is not None:
+            api.terminate()
+            api.wait(timeout=30)
     seconds = time.perf_counter() - started
 
     # --- server-side query time, on Postgres's own clock -------------------
@@ -691,13 +708,15 @@ def main(argv: list[str] | None = None) -> int:
         "--no-neighbours", action="store_true",
         help="graph-off ablation: score with no card/merchant neighbours, velocity kept",
     )
+    ap.add_argument("--api-url", default=None,
+                    help="--http against an API already running (e.g. the Compose one)")
     ap.add_argument("--label", default="separate",
                     help="name for this --http run inside the latency report")
     ap.add_argument("--latency-output", default="reports/metrics_latency.json")
     args = ap.parse_args(argv)
 
     if args.http:
-        report = replay_http(params, args.limit, args.reset_store)
+        report = replay_http(params, args.limit, args.reset_store, args.api_url)
         out = repo_path(args.latency_output)
         # Per-request scores beside the summary, so equivalence can be
         # re-checked against a later in-process replay without re-sending.

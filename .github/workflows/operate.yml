@@ -1,0 +1,121 @@
+# Operating the platform from GitHub: monitoring, promotion, rollback, keep-alive.
+#
+#   schedule (monthly)  monitor the closed months, then roll back automatically
+#                       if the champion is in a PERSISTENT degradation alert
+#   schedule (weekly)   ping Supabase so the free tier stops pausing the project
+#   workflow_dispatch   run any of it by hand: promote (dry run unless `apply`),
+#                       rollback, or a monitoring run as of a given date
+#
+# Secrets (Settings -> Secrets and variables -> Actions):
+#   AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY   Cloudflare R2 (dvc pull)
+#   MLFLOW_TRACKING_URI, MLFLOW_TRACKING_USERNAME, MLFLOW_TRACKING_PASSWORD
+#   DATABASE_URL                               Supabase
+#
+# The promotion gate and the monitoring job both need data, so they `dvc pull`
+# exactly what they read: the processed partitions, velocity, the encoder and
+# card mapping, and the DVC-tracked 2019 scores that are the gate's evidence.
+
+name: operate
+
+on:
+  schedule:
+    - cron: "0 6 2 * *"      # monthly, the 2nd at 06:00 UTC: the previous month has closed
+    - cron: "0 7 * * 1"      # weekly, Monday 07:00 UTC: keep Supabase awake
+  workflow_dispatch:
+    inputs:
+      action:
+        description: "what to run"
+        type: choice
+        options: [monitor, promote, rollback, keepalive]
+        default: promote
+      apply:
+        description: "promote/rollback: actually move the aliases (otherwise a dry run)"
+        type: boolean
+        default: false
+      as_of:
+        description: "monitor: the job's clock, e.g. 2019-11-01 (default: today)"
+        default: ""
+
+concurrency:
+  group: operate        # never two alias moves at once
+  cancel-in-progress: false
+
+env:
+  UV_EXTRA_INDEX_URL: https://download.pytorch.org/whl/cpu
+  UV_INDEX_STRATEGY: unsafe-best-match
+  MLFLOW_TRACKING_URI: ${{ secrets.MLFLOW_TRACKING_URI }}
+  MLFLOW_TRACKING_USERNAME: ${{ secrets.MLFLOW_TRACKING_USERNAME }}
+  MLFLOW_TRACKING_PASSWORD: ${{ secrets.MLFLOW_TRACKING_PASSWORD }}
+  DATABASE_URL: ${{ secrets.DATABASE_URL }}
+  AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+  AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+  DATA: >-
+    data/processed data/features/velocity data/features/encoder.json data/graph
+    reports/scores_xgb_2018.npz.dvc reports/scores_xgb_2019.npz.dvc
+    reports/metrics_replay_2018.npz.dvc reports/metrics_replay.npz.dvc
+
+jobs:
+  keepalive:
+    if: github.event.schedule == '0 7 * * 1' || inputs.action == 'keepalive'
+    runs-on: ubuntu-latest
+    steps:
+      - run: pip install "psycopg[binary]"
+      - name: select 1
+        run: python -c "import os, psycopg; psycopg.connect(os.environ['DATABASE_URL']).execute('select 1'); print('Supabase awake')"
+
+  monitor:
+    if: github.event.schedule == '0 6 2 * *' || inputs.action == 'monitor'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with: { python-version: "3.12", enable-cache: true }
+      - name: Monitoring env (decision 24)
+        run: |
+          uv venv --python 3.12 .venv-monitoring
+          uv pip install --python .venv-monitoring/bin/python "nannyml==0.13.1" statsmodels \
+            polars pyarrow matplotlib "psycopg[binary]" pyyaml python-dotenv
+          uv pip install --python .venv-monitoring/bin/python -e . --no-deps
+      - name: Data
+        run: pipx run --spec "dvc[s3]" dvc pull $DATA
+      - name: Monitor
+        run: |
+          as_of="${{ inputs.as_of }}"
+          [ -z "$as_of" ] && as_of="$(date -u +%Y-%m-%d)"
+          .venv-monitoring/bin/python -m fraud.monitoring.run --write --as-of "$as_of"
+      - name: Main env, for the alias move
+        run: |
+          uv venv --python 3.12 .venv
+          uv pip install --python .venv/bin/python -e ".[api]"
+      - name: Roll back if the champion is persistently alerting
+        run: .venv/bin/python -m fraud.models.promote --rollback --if-alerting --apply
+      - uses: actions/upload-artifact@v4
+        with: { name: rollback-report, path: reports/rollback.json, if-no-files-found: ignore }
+
+  gate:
+    if: inputs.action == 'promote' || inputs.action == 'rollback'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with: { python-version: "3.12", enable-cache: true }
+      - name: Main env
+        run: |
+          uv venv --python 3.12 .venv
+          uv pip install --python .venv/bin/python -e ".[api]"
+      - name: Data
+        run: pipx run --spec "dvc[s3]" dvc pull $DATA
+      - name: Promote or roll back
+        run: |
+          flags=""
+          [ "${{ inputs.action }}" = "rollback" ] && flags="--rollback"
+          [ "${{ inputs.apply }}" = "true" ] && flags="$flags --apply"
+          .venv/bin/python -m fraud.models.promote $flags
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ${{ inputs.action }}-report
+          path: reports/${{ inputs.action == 'rollback' && 'rollback' || 'promotion' }}.json
+          if-no-files-found: ignore

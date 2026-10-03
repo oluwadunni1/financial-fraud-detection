@@ -28,7 +28,6 @@ api = [
     "uvicorn[standard]>=0.30",
     "psycopg[binary,pool]>=3.2",
     "sqlalchemy>=2.0",
-    "shap>=0.46",
     "prometheus-client>=0.21",
     # Serving scores the graph end to end (decision 3, reversed in Phase 3), so
     # torch and PyG are runtime dependencies of the API, not just of training.
@@ -59,6 +58,9 @@ monitoring = [
 # Notebook experiments (notebooks/phase5/). Safe in .venv: resolves without
 # moving any existing package.
 notebook = [
+    # Explanations run in notebooks and analysis jobs, never in the request
+    # path -- kept out of `api`, where shap's numba/llvmlite cost ~220 MB.
+    "shap>=0.46",
     "jupyterlab>=4",
     "ipykernel>=6",
     "nbclient>=0.10",

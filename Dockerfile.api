@@ -1,0 +1,52 @@
+# The serving image: FastAPI + both scorers (XGBoost, GraphSAGE) on CPU.
+#
+# Multi-stage: dependencies are resolved in `build` and only the virtualenv and
+# the source travel to the runtime image. Torch is the CPU wheel -- the forward
+# pass is ~5 ms on CPU (decision 20) and the CUDA build is ~2 GB of dead weight.
+#
+# Model WEIGHTS are not in the image: the API loads @champion / @challenger from
+# the registry at startup and re-resolves the aliases while running, so a
+# champion swap is an alias move, not a rebuild (decision 14). What IS baked in
+# is what ships with the model and must never be re-fitted: the train-fitted
+# encoder and the card mapping.
+
+FROM python:3.12-slim AS build
+RUN pip install --no-cache-dir uv
+ENV UV_EXTRA_INDEX_URL=https://download.pytorch.org/whl/cpu \
+    UV_INDEX_STRATEGY=unsafe-best-match \
+    UV_LINK_MODE=copy
+WORKDIR /app
+COPY pyproject.toml ./
+COPY src ./src
+# Editable, so fraud.config resolves the repo root to /app (it walks up from
+# src/fraud/config.py) and params.yaml / data/ are found where the code expects.
+# XGBoost declares NCCL (multi-GPU training collectives, ~345 MB) on Linux; a
+# CPU predictor never loads it. Removed, and the image build proves the booster
+# still predicts without it.
+RUN uv venv /opt/venv --python 3.12 \
+ && uv pip install --python /opt/venv/bin/python --no-cache -e ".[api]" \
+ && uv pip uninstall --python /opt/venv/bin/python nvidia-nccl-cu13 \
+ && /opt/venv/bin/python -c "import numpy as np, xgboost as xgb; \
+b = xgb.train({'tree_method': 'hist'}, xgb.DMatrix(np.random.rand(64, 3), label=np.arange(64) % 2), 2); \
+assert b.predict(xgb.DMatrix(np.random.rand(4, 3))).shape == (4,)"
+
+FROM python:3.12-slim
+RUN useradd --create-home --uid 1000 fraud
+COPY --from=build /opt/venv /opt/venv
+WORKDIR /app
+COPY --from=build /app/src ./src
+COPY pyproject.toml params.yaml ./
+COPY data/features/encoder.json data/features/encoder.json
+COPY data/graph/card_mapping.json data/graph/card_mapping.json
+ENV PATH=/opt/venv/bin:$PATH \
+    PYTHONUNBUFFERED=1 \
+    MPLCONFIGDIR=/tmp
+USER fraud
+EXPOSE 8000
+HEALTHCHECK --interval=15s --timeout=5s --start-period=120s --retries=5 \
+  CMD python -c "import urllib.request,sys; sys.exit(urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=4).status != 200)"
+# One worker serialises every forward pass (and the shadow model's) behind one
+# GIL: the load test saturates at ~85 req/s whatever the concurrency. Workers
+# are processes, each with its own models and pool -- size to the cores.
+ENV API_WORKERS=1
+CMD ["sh", "-c", "exec uvicorn fraud.api.main:app --host 0.0.0.0 --port 8000 --workers ${API_WORKERS}"]

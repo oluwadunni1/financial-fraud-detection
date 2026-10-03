@@ -1,0 +1,6 @@
+outs:
+- md5: 83f7be42584ca1a1d7d1d4c7b79c9ee2
+  size: 8986505
+  isexec: true
+  hash: md5
+  path: scores_xgb_2019.npz

@@ -1,0 +1,82 @@
+# The platform, locally:  docker compose up --build
+#
+#   postgres  the hot store: Postgres 17 + pgvector, schema from sql/ applied on
+#             first start (the same four migrations Supabase runs)
+#   api       FastAPI: @champion decides, @challenger scores in shadow; models
+#             come from the DagsHub registry by alias (credentials from .env)
+#   monitor   the monthly monitoring job (fraud.monitoring.run) on a loop
+#
+# By default the API serves against the LOCAL Postgres -- the co-located setup
+# Phase 4 could only project. To serve against Supabase instead:
+#   docker compose --profile supabase up api-supabase
+#
+# .env supplies MLFLOW_TRACKING_URI/USERNAME/PASSWORD and DATABASE_URL (Supabase).
+
+name: fraud
+
+x-local-db: &local-db
+  DATABASE_URL: postgresql://fraud:fraud@postgres:5432/fraud
+
+services:
+  postgres:
+    image: pgvector/pgvector:pg17
+    environment:
+      POSTGRES_USER: fraud
+      POSTGRES_PASSWORD: fraud
+      POSTGRES_DB: fraud
+      TZ: UTC
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./sql:/docker-entrypoint-initdb.d:ro
+    ports:
+      - "5433:5432"          # 5433 on the host, so it never collides with a local Postgres
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U fraud -d fraud"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile.api
+    image: fraud-api:local
+    env_file: .env
+    environment:
+      <<: *local-db
+      API_WORKERS: "${API_WORKERS:-3}"    # leave a core for Postgres on a 4-core box
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
+  monitor:
+    build:
+      context: .
+      dockerfile: Dockerfile.jobs
+    image: fraud-jobs:local
+    env_file: .env
+    environment:
+      <<: *local-db
+      MONITOR_AS_OF: "2019-11-01"
+      MONITOR_INTERVAL_SECONDS: "86400"
+    volumes:                 # read-only: the job reads scores and data, writes only to the DB
+      - ./data:/app/data:ro
+      - ./reports:/app/reports:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
+  api-supabase:
+    profiles: ["supabase"]
+    image: fraud-api:local
+    env_file: .env           # DATABASE_URL from .env: the live Supabase store
+    ports:
+      - "8001:8000"
+    restart: unless-stopped
+
+volumes:
+  pgdata:

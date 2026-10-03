@@ -1,0 +1,13 @@
+# Whitelist: the build context is everything EXCEPT what is re-included below.
+# data/ is 4+ GB locally; the API image needs two small artifacts from it, and
+# the jobs container mounts the rest at run time instead of baking it in.
+*
+!pyproject.toml
+!params.yaml
+!src/
+!sql/
+!docker/
+!data/features/encoder.json
+!data/graph/card_mapping.json
+**/__pycache__
+**/*.pyc

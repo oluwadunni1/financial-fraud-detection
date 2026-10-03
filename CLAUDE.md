@@ -42,12 +42,20 @@ phases; section 10 is the Lightning AI setup.
 
 ## Current state (update as phases complete)
 
+**Phase 6 built (2026-10-04).** GraphSAGE is **@champion** (v3), promoted through the new
+gate; XGBoost v4 scores every request in shadow and is one command from a rollback. The
+graph-off ablation settled the project's question: without its neighbourhood GraphSAGE
+falls from **0.4665 to 0.0418** (decision 28). Compose runs Postgres + API + monitoring;
+co-located latency **measured** at **10.4 ms p50 / 15.4 p95**; 3 workers serve ~180 req/s
+with shadow on. A live alias move swapped the running API's champion in 11 s, no redeploy.
+Our CI replaces NVIDIA's; the GitHub push of it waits on the `workflow` token scope.
+
 **Phase 5 done (2026-10-03).** Three notebooks on production code
 (`notebooks/phase5/`). Without a single label, NannyML CBPE reads XGBoost's 2019 drop
 (true −24%, estimated −18%) and GraphSAGE's stability (−2% / −2%), flagging XGBoost **89
 days** before delayed chargebacks could. Exact explanations for both models: XGBoost's
-false positives are almost all `Chip = Online`; GraphSAGE's top alerts are driven by
-velocity and the transaction, not the graph -- including the frauds only GraphSAGE catches.
+false positives are almost all `Chip = Online`; GraphSAGE's group Shapley gives the graph
+~15% of the push on frauds (read at first as "not the graph" -- disproved, decision 28).
 A 1 h ingest lag *raises* GraphSAGE's AUC-PR (+0.074), almost all through velocity: the
 short-window velocity signal has drifted since training (decision 27). Ingest SLA 24 h. The
 monthly job (`fraud.monitoring.run`) alerts on XGBoost from May 2019, never on GraphSAGE.
@@ -80,7 +88,7 @@ subgraph, p50 5.4ms / p95 13.0ms in-process (the database is measured in Phase 4
 | Pipeline (`dvc.yaml`) | **Done** -- `ingest` -> `validate` / `split` / `sample` |
 | Processed data | **Done** -- 30 year partitions, 538 MB Parquet (from 2.35 GB CSV) |
 | Features | **Done** -- 86 columns (69 encoded + 4 numeric + 13 velocity) |
-| Champion | **Registered** -- `models:/fraud-champion@champion`, AUC-PR 0.3190 |
+| Champion | **GraphSAGE v3** -- `@champion`, served AUC-PR 0.4665; XGBoost v4 `@challenger` in shadow and `@previous` |
 | Serving | **Done** -- FastAPI `/predict`, per-request subgraph, 2 DB round trips; projected 14 ms p50 / 17 ms p95 same-AZ |
 | Causal replay | **Done** -- 1,723,938 rows of 2019, AUC-PR **0.4665**, P@100 0.710 |
 | Latency replay | **Done** -- `replay.py --http`, 3,000 requests, scores equal to the in-memory replay on all 3,000 |
@@ -89,7 +97,10 @@ subgraph, p50 5.4ms / p95 13.0ms in-process (the database is measured in Phase 4
 | Explainability | **Experiment done** -- `02_explainability.ipynb`; exact TreeSHAP reason codes + GraphSAGE group Shapley |
 | Staleness | **Measured** -- `03_staleness_and_operations.ipynb`; ingest SLA 24 h; velocity drift found |
 | Monitoring job | **Running** -- `python -m fraud.monitoring.run`; rows + watermarks in Supabase (as of 2019-11-01) |
-| Tests | **301 passing** in `.venv` across 19 files, **14** under `.venv-monitoring` |
+| Containers | **Done** -- `Dockerfile.api` (1.9 GB), `Dockerfile.jobs`, `docker-compose.yml` (postgres + api + monitor) |
+| Load | **Measured** -- co-located p50 10.4 / p95 15.4 ms; ~180 req/s at 3 workers, shadow on |
+| CI/CD | **Built** -- `ci.yml` (lint+tests, 2 envs), `operate.yml` (monitor, promote, rollback, keep-alive); needs secrets |
+| Tests | **312 passing** in `.venv` across 21 files, **14** under `.venv-monitoring` |
 
 Measured dataset facts now live in `docs/ARCHITECTURE.md` section 2.1. Read that before
 writing any feature code -- several of them contradict what the scaffolding assumed.
@@ -229,6 +240,25 @@ These were settled deliberately. Reopen only if new evidence appears.
    learned meaning of the 1 h / seconds-since-last signal is what moved -- monitoring flagged
    `velocity_seconds_since_last` independently. Do NOT ship a deliberate ingest lag as a
    "fix": it is a symptom. Retrain or review those features. Ingest SLA stays 24 h.
+28. **GraphSAGE's edge depends on its neighbourhood -- the ablation, not Shapley, decides.**
+   Replaying all of 2019 with no card/merchant neighbours (velocity kept) drops AUC-PR
+   0.4665 -> **0.0418** (P@100 0.71 -> 0.05; Δ −0.425 [−0.445, −0.404]), below XGBoost.
+   Phase 5 had read group Shapley (graph ~15% of the push on frauds) as "not the graph";
+   wrong -- Shapley on positives measures push from a baseline, not ranking among 1.7M
+   legitimate rows. Caveat: an empty neighbourhood is out of training distribution too, so
+   this proves dependence; a shuffled-neighbour control would isolate the relationships.
+29. **Promotion goes through `fraud.models.promote`, never a hand-set alias.** The gate
+   re-scores 2019 transactions THROUGH the registry for both candidate and champion (each
+   must reproduce its evaluated scores), requires the family's evidence, and demands
+   `min_auc_pr_gain` on the served 2019 number. On pass: @previous <- old champion,
+   @champion <- candidate, @challenger <- old champion (shadow + rollback). Every attempt
+   is an MLflow run. Needed twice over: @champion v1 was the pre-velocity-fix XGBoost (0.3190)
+   and stayed registered after the honest 0.2501 retrain -- now v4, verified bit-equal.
+30. **The API is two models behind one contract, swapped by alias at runtime.** Scorers are
+   chosen from the logged MLflow flavour; the champion decides, the challenger scores the
+   same history after the response (`predictions.challenger_*`); a watcher thread re-resolves
+   aliases every `alias_refresh_seconds` and loads a new model fully before swapping it in.
+   Workers are processes: one serialises everything behind the GIL (~85 req/s ceiling).
 
 ## Conventions
 
@@ -343,6 +373,13 @@ These were settled deliberately. Reopen only if new evidence appears.
   kernel** (`python3`, no NannyML). It happened to 01 twice; the only diff is metadata.
   Pick `fraud` / `fraud-monitoring` from the kernel menu before saving, or restore with
   `git checkout`. `tests/test_notebooks.py` asserts each notebook names its kernel.
+- **MLflow with no tracking URI silently uses a local `./mlflow.db`** and reports that the
+  registered model "does not exist". Set the URI before ANY registry call (`promote.family`
+  once did it in the wrong order and created the file).
+- **XGBoost pulls `nvidia-nccl-cu13` (345 MB) on Linux** for multi-GPU training; the API
+  image uninstalls it and proves at build time that the booster still predicts.
+- **The jobs image needs `libgomp1`**: NannyML imports LightGBM, which links system OpenMP.
+- **Pushing workflow files needs the `workflow` token scope**: `gh auth refresh -s workflow`.
 - **Never run a sharded replay from a stdin script.** `spawn` workers re-import `__main__`
   from a file that does not exist and the pool hangs. Use the module entry points.
 - **`source .venv/bin/activate` does NOT change which `python` runs.** The shell profile

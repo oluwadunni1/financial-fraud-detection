@@ -85,7 +85,7 @@ class Predictor:
 
         load_dotenv(REPO_ROOT / ".env")
         mlflow.set_tracking_uri(os.environ["MLFLOW_TRACKING_URI"])
-        alias = alias or params["serving"]["model_alias"]
+        alias = alias or params["serving"]["champion_alias"]
         name = params["mlflow"]["registered_model_name"]
 
         uri = f"models:/{name}@{alias}"
@@ -218,3 +218,93 @@ def transaction_from_row(row: dict[str, Any]) -> dict[str, Any]:
         "Month": int(row["Month"]),
         "Day": int(row["Day"]),
     }
+
+
+class XGBoostPredictor:
+    """The tabular champion behind the same contract as the graph model.
+
+    `score(transaction, neighbourhood)` takes the same inputs the GraphSAGE
+    predictor does, so the API, shadow mode and the replay never branch on
+    model type. The 86 features are rebuilt exactly as `features/build.py`
+    builds them offline: the train-fitted encoder over the transaction plus
+    its velocity, in the booster's own column order (asserted at load).
+    Velocity comes from `velocity_for_transaction` -- the one module, two
+    callers rule -- and `tests/test_scorers.py` holds online == offline.
+    """
+
+    def __init__(self, booster: Any, encoder: Encoder, windows_hours: list[int],
+                 model_version: str, max_neighbours: int = 10):
+        names = list(booster.feature_names or [])
+        if names != encoder.feature_names():
+            raise RuntimeError(
+                "booster and encoder disagree on feature order -- the encoder must "
+                "ship with the model it was fitted for")
+        self.booster = booster
+        self.encoder = encoder
+        self.windows_hours = windows_hours
+        self.model_version = model_version
+        self.max_neighbours = max_neighbours
+        best = booster.attr("best_iteration")
+        self._iterations = (0, int(best) + 1) if best is not None else (0, 0)
+
+    def features(self, transaction: dict[str, Any], velocity: dict[str, float]):
+        return self.encoder.transform_rows([{**transaction, **velocity}])
+
+    def score(self, transaction: dict[str, Any], neighbourhood: Neighbourhood) -> Prediction:
+        import xgboost as xgb
+
+        started = time.perf_counter()
+        history = (neighbourhood.user_history if neighbourhood.velocity_history is None
+                   else neighbourhood.velocity_history)
+        velocity = velocity_for_transaction(transaction, history, self.windows_hours)
+        x = xgb.DMatrix(self.features(transaction, velocity),
+                        feature_names=self.encoder.feature_names())
+        score = float(self.booster.predict(x, iteration_range=self._iterations)[0])
+        return Prediction(
+            score=score,
+            velocity=velocity,
+            cold_start_user=neighbourhood.cold_start_user,
+            cold_start_merchant=neighbourhood.cold_start_merchant,
+            latency_ms=(time.perf_counter() - started) * 1000.0,
+            model_version=self.model_version,
+        )
+
+
+def resolve_alias(params: dict, alias: str) -> str:
+    """The registry version an alias points at right now, as a string."""
+    import mlflow
+
+    name = params["mlflow"]["registered_model_name"]
+    return str(mlflow.tracking.MlflowClient().get_model_version_by_alias(name, alias).version)
+
+
+def load_scorer(params: dict, alias: str):
+    """Whatever model `alias` points at, behind the one scoring contract.
+
+    The flavour is read from the logged model itself (xgboost or pytorch), so
+    promoting a different kind of model is still just an alias move.
+    """
+    import os
+
+    import mlflow
+    from dotenv import load_dotenv
+
+    from fraud.config import REPO_ROOT, repo_path
+
+    load_dotenv(REPO_ROOT / ".env")
+    mlflow.set_tracking_uri(os.environ["MLFLOW_TRACKING_URI"])
+    name = params["mlflow"]["registered_model_name"]
+    uri = f"models:/{name}@{alias}"
+    flavours = mlflow.models.get_model_info(uri).flavors
+    version = f"{name}@{alias}:v{resolve_alias(params, alias)}"
+    if "xgboost" in flavours:
+        booster = mlflow.xgboost.load_model(uri)
+        booster = booster.get_booster() if hasattr(booster, "get_booster") else booster
+        return XGBoostPredictor(
+            booster, Encoder.from_json(repo_path(params["paths"]["encoder"])),
+            params["velocity"]["windows_hours"], version,
+            max_neighbours=params["serving"]["neighbours"])
+    if "pytorch" in flavours:
+        model = mlflow.pytorch.load_model(uri, map_location="cpu")
+        return Predictor._assemble(model, params, version)
+    raise RuntimeError(f"{uri} has no flavour this API can serve: {sorted(flavours)}")

@@ -2,7 +2,7 @@
 
 > The reference doc for this repo: system design, storage budget, phased build plan,
 > verification strategy. Section 6 has the phases; section 10 is the Lightning AI setup.
-> Last updated: 2026-10-03 (Phase 5 first half -- label-free monitoring and exact explanations)
+> Last updated: 2026-10-04 (Phase 6 built -- GraphSAGE promoted through the gate; Compose stack measured)
 
 ---
 
@@ -911,11 +911,11 @@ model, 36 transactions):
 
 **Second half** (`03_staleness_and_operations.ipynb`, plus §6 of `02_explainability`):
 
-- **Where GraphSAGE wins, the graph is not what wins it.** Group Shapley on the 51 frauds it
-  ranks in its top 5,000 that XGBoost ranks below 20,000 -- and on 50 frauds both catch --
-  gives the same profile: transaction ~50%, velocity ~35%, graph groups **~15% in every set**.
-  Its edge is in how it reads the transaction and its velocity, not in the neighbourhood at
-  scoring time. The decisive test is a graph-off ablation of the served model (next step).
+- **Where GraphSAGE wins -- corrected by Phase 6.** Group Shapley gives the graph groups
+  ~15% of the push on frauds GraphSAGE uniquely catches, which this phase first read as
+  "not the graph". The Phase 6 graph-off ablation disproved that: without its neighbourhood
+  GraphSAGE falls 0.4665 -> 0.0418. Shapley on positives measures push from a baseline,
+  not ranking among legitimate traffic (decision 28).
 - **Staleness, measured.** GraphSAGE replayed on Apr-Jun 2019 (429,456 rows, 693 frauds)
   with history visible only once it is `lag` old; lag 0 reproduces the full replay row for row.
 
@@ -934,26 +934,47 @@ model, 36 transactions):
   alerts from **1 May 2019** (5 of 11 runs), GraphSAGE **never** -- its single weak months are
   absorbed by the two-month persistence rule.
 
-### Phase 6 — CI/CD, model swapping & deploy
+### Phase 6 — CI/CD, model swapping & Compose — **BUILT (2026-10-04)**
 
 With two genuinely competing models the registry stops being ceremony and becomes the
-centre of the project. This is where that pays off.
+centre of the project. Deploy target deferred: Compose-only for now (a decision, not a gap).
 
-- [ ] `Dockerfile.api` (slim, multi-stage), `Dockerfile.jobs`
-- [ ] Compose: api + dashboard + scheduler
-- [ ] **Shadow mode** -- challenger scores every request alongside champion; only the
-      champion's decision is used, both are logged. Highest value-per-unit-work item in
-      the project: real-traffic comparison at zero risk.
-- [ ] **Promotion gate in CI** -- challenger must beat champion on held-out AUC-PR
-      before it can be promoted. Automated and auditable.
-- [ ] **Registry-driven swap** -- flip the MLflow stage, the API picks up the new
-      champion with no redeploy. This is the demo moment.
-- [ ] **Rollback path** -- NannyML degradation alert -> revert to previous champion
-- [ ] k6/locust load test -> throughput + p50/p95/p99, per model
-- [ ] GitHub Actions: lint, test, `dvc repro` on a sample, eval, build/push image
-- [ ] Deploy API to cloud; schedule jobs
-- **Done when:** swapping the champion in the registry changes live scoring behaviour
-  without a redeploy, and CI blocks a promotion that fails the gate.
+- [x] **Graph-off ablation, before promoting anything.** All of 2019 replayed with no
+      card/merchant neighbours, velocity kept: AUC-PR **0.4665 -> 0.0418**, P@100 0.71 -> 0.05,
+      Δ −0.425 [−0.445, −0.404]. The served model depends on its neighbourhood (decision 28).
+- [x] `Dockerfile.api` (multi-stage, CPU torch, NCCL removed: 2.43 -> **1.9 GB**),
+      `Dockerfile.jobs` (the NannyML env, decision 24) -- two images for two environments
+- [x] Compose: `postgres` (pgvector, `sql/` 001-004 applied unchanged) + `api` + `monitor`;
+      a `supabase` profile serves against the live store instead
+- [x] **Shadow mode** -- `@challenger` scores the same history after the response,
+      into `predictions.challenger_*`; 2,430 / 2,430 load-test requests shadow-scored
+- [x] **Promotion gate** -- `fraud.models.promote`: both models re-scored through the
+      registry (must reproduce their evaluations), evidence required, +0.02 AUC-PR required.
+      It found @champion v1 was the pre-velocity-fix XGBoost; v4 registered, bit-equal.
+      GraphSAGE v3 promoted: +0.216 over XGBoost.
+- [x] **Registry-driven swap** -- aliases re-resolved every 30 s; the running Compose API
+      swapped champion v4 -> v3 **11 s after** the gate moved the aliases. No redeploy.
+- [x] **Rollback path** -- `promote --rollback [--if-alerting]` reads the monitoring job's
+      persistent alert for the champion's family from `drift_metrics`
+- [x] Load test (`fraud.jobs.loadtest`) and co-located latency (HTTP replay vs Compose)
+- [x] GitHub Actions: `ci.yml` (lint + tests in both envs, no secrets) replaces NVIDIA's
+      GPU-runner workflow; `operate.yml` (monthly monitor + auto-rollback, weekly Supabase
+      keep-alive, manual promote/rollback). Needs repo secrets to run.
+- [ ] Image build/push in CI; cloud deploy (deferred with the deploy target)
+
+**Measured against the Compose stack** (Postgres in the next container -- what Phase 4 projected):
+
+| | p50 | p95 | p99 | throughput |
+|---|---|---|---|---|
+| HTTP replay, 3,000 sequential requests | **10.4 ms** | 15.4 ms | 18.2 ms | |
+| load, 1 worker, concurrency 16 | 191 ms | 240 ms | 265 ms | 82 req/s |
+| load, **3 workers**, concurrency 1 | 10.4 ms | 13.7 ms | 16.0 ms | 92 req/s |
+| load, **3 workers**, concurrency 16 | 71 ms | 166 ms | 211 ms | **183 req/s** |
+
+The served champion matched the causal replay on all 3,000 scores (max diff 6e-08). One
+worker saturates at ~85 req/s whatever the concurrency -- every forward pass, and the shadow
+model's, runs behind one GIL; workers are processes. Numbers are from a 4-core box also
+running Postgres, the load generator and the shadow model.
 
 > **Deliberately NOT adding a full orchestrator.** Airflow/Dagster/Prefect-server means
 > running a scheduler, a webserver and a metadata DB -- substantial infra for a demo and

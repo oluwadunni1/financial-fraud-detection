@@ -1,0 +1,35 @@
+# The jobs image: the monitoring job (`python -m fraud.monitoring.run`).
+#
+# Its own image because it is its own environment (decision 24): NannyML's pins
+# cannot share the API's. It reads scores and data, never a model, so it carries
+# no torch and no XGBoost of its own beyond what NannyML pulls in. Data, scores
+# and reports are MOUNTED at run time, not baked in -- they change every run and
+# data/ alone is gigabytes.
+
+FROM python:3.12-slim AS build
+RUN pip install --no-cache-dir uv
+ENV UV_LINK_MODE=copy
+WORKDIR /app
+COPY pyproject.toml ./
+COPY src ./src
+RUN uv venv /opt/venv --python 3.12 \
+ && uv pip install --python /opt/venv/bin/python --no-cache \
+      "nannyml==0.13.1" statsmodels polars pyarrow matplotlib "psycopg[binary]" \
+      pyyaml python-dotenv \
+ && uv pip install --python /opt/venv/bin/python --no-cache --no-deps -e .
+
+FROM python:3.12-slim
+# NannyML imports LightGBM, which links the system OpenMP runtime; slim has none.
+RUN apt-get update && apt-get install -y --no-install-recommends libgomp1 \
+ && rm -rf /var/lib/apt/lists/* \
+ && useradd --create-home --uid 1000 fraud
+COPY --from=build /opt/venv /opt/venv
+WORKDIR /app
+COPY --from=build /app/src ./src
+COPY pyproject.toml params.yaml ./
+COPY docker/monitor-loop.sh /usr/local/bin/monitor-loop
+ENV PATH=/opt/venv/bin:$PATH \
+    PYTHONUNBUFFERED=1 \
+    MPLCONFIGDIR=/tmp
+USER fraud
+CMD ["monitor-loop"]

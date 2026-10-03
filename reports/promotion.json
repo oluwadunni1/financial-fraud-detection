@@ -1,0 +1,40 @@
+{
+  "candidate_alias": "challenger",
+  "checks": [
+    {
+      "check": "registry @challenger reproduces its evaluation",
+      "alias": "challenger",
+      "version": "fraud-champion@challenger:v3",
+      "family": "graphsage",
+      "rows": 25,
+      "max_abs_diff": 2.9802322387695312e-08,
+      "passed": true
+    },
+    {
+      "check": "registry @champion reproduces its evaluation",
+      "alias": "champion",
+      "version": "fraud-champion@champion:v4",
+      "family": "xgboost",
+      "rows": 25,
+      "max_abs_diff": 0.0,
+      "passed": true
+    },
+    {
+      "check": "evidence present",
+      "missing": [],
+      "passed": true
+    },
+    {
+      "check": "beats the champion",
+      "candidate_auc_pr": 0.4664956962718998,
+      "champion_auc_pr": 0.25012668376265973,
+      "gain": 0.21636901250924007,
+      "required": 0.02,
+      "passed": true
+    }
+  ],
+  "passed": true,
+  "champion_before": "4",
+  "candidate": "3",
+  "applied": true
+}

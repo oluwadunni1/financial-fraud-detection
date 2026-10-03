@@ -376,8 +376,8 @@ stages:
       isexec: true
     - path: src/fraud/models/registry.py
       hash: md5
-      md5: 739a543769369c23d3b63e2ce9189c57
-      size: 5966
+      md5: b891f30e1e82485a6dfe09b067072289
+      size: 6457
       isexec: true
     params:
       params.yaml:
@@ -391,9 +391,8 @@ stages:
     outs:
     - path: reports/registry.json
       hash: md5
-      md5: aa280ac765477674744861214bdf7e60
-      size: 250
-      isexec: true
+      md5: fa3c4acd57b6fcf74251b8ead29757c6
+      size: 251
   build_graph:
     cmd: .venv/bin/python -m fraud.features.graph
     deps:
