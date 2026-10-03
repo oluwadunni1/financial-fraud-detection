@@ -1,0 +1,66 @@
+# Lint and test on every push and PR.
+#
+# Replaces the inherited NVIDIA "Notebook Runner", which asked for a GPU runner
+# that exists only in NVIDIA's org: on this repo every push queued a job that
+# never started and was cancelled 24 h later.
+#
+# No secrets are needed here. Tests that need data/, a trained model or the
+# database skip cleanly without them -- measured on a data-less copy: 275 pass,
+# 24 skip. Two environments, as locally (decision 24): NannyML cannot share the
+# main env, so its tests run in their own.
+
+name: ci
+
+on:
+  push:
+    branches: [main, mlops-platform]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # CPU wheels: the runner has no GPU, and the CUDA build is ~2 GB of download.
+  UV_EXTRA_INDEX_URL: https://download.pytorch.org/whl/cpu
+  UV_INDEX_STRATEGY: unsafe-best-match
+
+jobs:
+  test:
+    name: lint + tests (.venv)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: "3.12"
+          enable-cache: true
+      - name: Install
+        run: |
+          uv venv --python 3.12 .venv
+          uv pip install --python .venv/bin/python -e ".[dev,api,gnn,notebook]"
+      - name: Lint
+        run: .venv/bin/python -m ruff check src tests scripts
+      - name: Tests
+        run: .venv/bin/python -m pytest -q
+
+  monitoring:
+    name: monitoring tests (.venv-monitoring)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: "3.12"
+          enable-cache: true
+      - name: Install (NannyML apart from the main env -- pyproject.toml `monitoring`)
+        run: |
+          uv venv --python 3.12 .venv-monitoring
+          uv pip install --python .venv-monitoring/bin/python "nannyml==0.13.1" statsmodels \
+            polars pyarrow matplotlib "psycopg[binary]" pyyaml python-dotenv pytest
+          uv pip install --python .venv-monitoring/bin/python -e . --no-deps
+      - name: Tests
+        run: .venv-monitoring/bin/python -m pytest -q -p no:cacheprovider tests/test_monitoring.py

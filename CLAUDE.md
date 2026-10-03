@@ -339,9 +339,10 @@ These were settled deliberately. Reopen only if new evidence appears.
   so realized metrics are undefined there while label-free estimates are not -- CBPE keeps
   estimating 0.27-0.38. A change in the label distribution is invisible in the scores.
 - **Monthly AUC-PR at ~200 frauds swings ±0.1 on noise alone.** Never alert on one month.
-- **`nbconvert --execute --inplace` can rewrite a notebook's kernelspec** (01 became
-  `python3`, the main env without NannyML). `tests/test_notebooks.py` asserts each
-  notebook names its kernel.
+- **Saving a notebook in the Studio's JupyterLab re-binds it to the default `cloudspace`
+  kernel** (`python3`, no NannyML). It happened to 01 twice; the only diff is metadata.
+  Pick `fraud` / `fraud-monitoring` from the kernel menu before saving, or restore with
+  `git checkout`. `tests/test_notebooks.py` asserts each notebook names its kernel.
 - **Never run a sharded replay from a stdin script.** `spawn` workers re-import `__main__`
   from a file that does not exist and the pool hangs. Use the module entry points.
 - **`source .venv/bin/activate` does NOT change which `python` runs.** The shell profile

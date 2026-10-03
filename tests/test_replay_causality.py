@@ -284,3 +284,13 @@ def test_a_lag_can_be_applied_to_one_consumer_only(mode):
     assert (graph, velocity) == ((lagged, fresh) if mode == "graph" else (fresh, lagged))
     merchant = sorted(nb.merchant_history["txn_id"].to_list())
     assert merchant == (lagged if mode == "graph" else fresh)
+
+
+def test_the_graph_off_ablation_keeps_velocity_and_drops_every_neighbour():
+    h = CausalHistory(window_hours=168, merchant_cap=10, drop_neighbours=True)
+    base = D(2019, 6, 1)
+    for i in range(4):
+        h.add(txn(i, user=7, ts=base - dt.timedelta(hours=i + 1)), {})
+    nb = h.neighbourhood(txn(99, user=7, ts=base))
+    assert nb.user_history.is_empty() and nb.merchant_history.is_empty()
+    assert sorted(nb.velocity_history["txn_id"].to_list()) == [0, 1, 2, 3]

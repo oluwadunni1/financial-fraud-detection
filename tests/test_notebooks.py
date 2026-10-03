@@ -52,9 +52,9 @@ EXPECTED_KERNEL = {"01_monitoring": "fraud-monitoring",
 
 def test_committed_notebooks_carry_outputs_and_the_right_kernel():
     """They are committed executed, so the charts read on GitHub -- and they
-    name the kernel they need. `nbconvert --execute --inplace` once rewrote
-    01's kernelspec to `python3` (the main env, no NannyML): the notebook still
-    looked fine on GitHub and failed for anyone who opened it."""
+    name the kernel they need. Saving 01 in the Studio's JupyterLab re-bound it
+    to the default `python3` kernel (no NannyML), twice: the notebook still
+    looked fine on GitHub and failed for anyone who ran it."""
     assert NOTEBOOKS, "no Phase 5 notebooks found"
     for path in NOTEBOOKS:
         nb = nbformat.read(path, as_version=4)

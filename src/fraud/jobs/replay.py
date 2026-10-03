@@ -75,7 +75,8 @@ class CausalHistory:
     """
 
     def __init__(self, window_hours: int, merchant_cap: int,
-                 visibility_lag_hours: float = 0.0, lag_applies_to: str = "both"):
+                 visibility_lag_hours: float = 0.0, lag_applies_to: str = "both",
+                 drop_neighbours: bool = False):
         self.window = dt.timedelta(hours=window_hours)
         self.merchant_cap = merchant_cap
         # The staleness experiment: a row becomes visible only once it is
@@ -87,6 +88,10 @@ class CausalHistory:
         if lag_applies_to not in ("both", "graph", "velocity"):
             raise ValueError(f"lag_applies_to must be both/graph/velocity, not {lag_applies_to!r}")
         self.lag_applies_to = lag_applies_to
+        # The graph-off ablation: the model gets NO card or merchant neighbours
+        # (its id nodes aggregate nothing) while velocity still reads the card's
+        # full history. Whatever survives is what the graph did not contribute.
+        self.drop_neighbours = drop_neighbours
         self._users: dict[int, collections.deque] = collections.defaultdict(
             collections.deque
         )
@@ -145,6 +150,9 @@ class CausalHistory:
             else []
         )
         merchant = pl.DataFrame(merchant_visible) if merchant_visible else EMPTY
+        if self.drop_neighbours:
+            return Neighbourhood(user_history=EMPTY, merchant_history=EMPTY,
+                                 velocity_history=user)
         return Neighbourhood(
             user_history=user, merchant_history=merchant,
             velocity_history=(None if velocity_rows is None
@@ -393,13 +401,14 @@ def _run_shard(job: tuple) -> dict:
 
     # The shard's own rows travel with the job (a few MB pickled) rather than
     # being re-read by index, so a slice replays as correctly as a whole year.
-    index, rows, params, model_dir, graph_since, lag_hours, lag_applies_to = job
+    index, rows, params, model_dir, graph_since, lag_hours, lag_applies_to, drop = job
     predictor = Predictor.from_disk(params, model_dir)
     history = CausalHistory(
         window_hours=params["serving"]["history_hours"],
         merchant_cap=params["serving"]["neighbours"],
         visibility_lag_hours=lag_hours,
         lag_applies_to=lag_applies_to,
+        drop_neighbours=drop,
     )
     seeded = seed_history(
         history, params, rows["ts"].min(), params["serving"]["history_hours"],
@@ -415,7 +424,7 @@ def _run_shard(job: tuple) -> dict:
 def replay_sharded(
     rows: pl.DataFrame, params: dict, years: list[int], model_dir, shards: int,
     lag_hours: float = 0.0, graph_since: dt.datetime | None = None,
-    lag_applies_to: str = "both",
+    lag_applies_to: str = "both", drop_neighbours: bool = False,
 ) -> dict:
     """Replay contiguous time ranges in parallel and stitch them back together."""
     import multiprocessing as mp
@@ -434,7 +443,8 @@ def replay_sharded(
             hours=params["serving"]["history_hours"]
         )
     jobs = [
-        (i, rows[lo:hi], params, model_dir, graph_since, lag_hours, lag_applies_to)
+        (i, rows[lo:hi], params, model_dir, graph_since, lag_hours, lag_applies_to,
+         drop_neighbours)
         for i, (lo, hi) in enumerate(ranges)
     ]
 
@@ -677,6 +687,10 @@ def main(argv: list[str] | None = None) -> int:
         "--reset-store", action="store_true",
         help="truncate transaction_events and predictions before seeding",
     )
+    ap.add_argument(
+        "--no-neighbours", action="store_true",
+        help="graph-off ablation: score with no card/merchant neighbours, velocity kept",
+    )
     ap.add_argument("--label", default="separate",
                     help="name for this --http run inside the latency report")
     ap.add_argument("--latency-output", default="reports/metrics_latency.json")
@@ -720,12 +734,14 @@ def main(argv: list[str] | None = None) -> int:
     print(f"model: {predictor.model_version}")
 
     if args.shards > 1:
-        result = replay_sharded(rows, params, args.years, model_dir, args.shards)
+        result = replay_sharded(rows, params, args.years, model_dir, args.shards,
+                                drop_neighbours=args.no_neighbours)
         seeded = -1
     else:
         history = CausalHistory(
             window_hours=params["serving"]["history_hours"],
             merchant_cap=params["serving"]["neighbours"],
+            drop_neighbours=args.no_neighbours,
         )
         seeded = seed_history(
             history, params, rows["ts"].min(), params["serving"]["history_hours"]
@@ -746,7 +762,8 @@ def main(argv: list[str] | None = None) -> int:
 
     latency = result["latency_ms"]
     report = {
-        "mode": "in_process_causal",
+        "mode": ("in_process_causal_no_neighbours" if args.no_neighbours
+                 else "in_process_causal"),
         "years": args.years,
         "model_version": predictor.model_version,
         "seeded_rows": seeded,
