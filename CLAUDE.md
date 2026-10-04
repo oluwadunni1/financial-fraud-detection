@@ -106,7 +106,7 @@ subgraph, p50 5.4ms / p95 13.0ms in-process (the database is measured in Phase 4
 | Explainability | **Experiment done** -- `02_explainability.ipynb`; exact TreeSHAP reason codes + GraphSAGE group Shapley |
 | Staleness | **Measured** -- `03_staleness_and_operations.ipynb`; ingest SLA 24 h; velocity drift found |
 | Monitoring job | **Running** -- `python -m fraud.monitoring.run`; rows + watermarks in Supabase (as of 2019-11-01) |
-| Containers | **Done** -- `Dockerfile.api` (1.9 GB), `Dockerfile.jobs`, `docker-compose.yml` (postgres + api + monitor) |
+| Containers | **Done** -- `Dockerfile.api` (1.9 GB), `Dockerfile.jobs`, `docker-compose.yml` (postgres + api + monitor); built by CI (`images.yml`) to `ghcr.io/oluwadunni1/fraud-{api,jobs}`, `docker compose pull` |
 | Load | **Measured** -- co-located p50 10.4 / p95 15.4 ms; ~180 req/s at 3 workers, shadow on |
 | CI/CD | **Live** -- `ci.yml` (lint+tests, 2 envs) green; `operate.yml` (weekly keep-alive, monthly monitor + auto-rollback, manual gate) with secrets set |
 | Tests | **317 passing** in `.venv` across 22 files, **14** under `.venv-monitoring` |
@@ -387,6 +387,11 @@ These were settled deliberately. Reopen only if new evidence appears.
   once did it in the wrong order and created the file).
 - **XGBoost pulls `nvidia-nccl-cu13` (345 MB) on Linux** for multi-GPU training; the API
   image uninstalls it and proves at build time that the booster still predicts.
+- **A container's CMD must be executable by the container's USER, from a clean checkout.**
+  `monitor-loop` was `rwxr--r--` (root only) while the image runs as `fraud`, and git
+  stored it `644` anyway -- the monitor service never started, invisible because every
+  demo used `docker compose run monitor python -m ...`, which bypasses the CMD. Fixed with
+  `COPY --chmod=755`; `images.yml`'s smoke test now asserts `test -x`.
 - **The jobs image needs `libgomp1`**: NannyML imports LightGBM, which links system OpenMP.
 - **Pushing workflow files needs the `workflow` token scope**: `gh auth refresh -s workflow`.
 - **On a CPU-torch runner, `python -m` imports NVIDIA's `triton/` folder as `triton`.**

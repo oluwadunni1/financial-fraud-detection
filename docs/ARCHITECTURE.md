@@ -963,7 +963,12 @@ centre of the project. Deploy target deferred: Compose-only for now (a decision,
       keep-alive, manual promote/rollback). **Live 2026-10-04**: secrets set by
       `scripts/set_github_secrets.sh`; keep-alive, gate and monitor each verified by a
       dispatched run. A refused dry run exits 3 and stays green, verdict in the run summary.
-- [ ] Image build/push in CI; cloud deploy (deferred with the deploy target)
+- [x] Image build/push in CI (`images.yml`, 2026-10-04): after `ci` passes on main, both
+      images are built, smoke-tested and pushed to `ghcr.io/oluwadunni1/fraud-{api,jobs}`
+      tagged `<sha>` + `latest`; public, ~5.5 min cold. `docker compose pull` replaces the
+      5 min local build. Its first run exposed that the monitor service had NEVER started:
+      `monitor-loop` was 744 (root-only) in every image, and git stored it 644
+- [ ] Cloud deploy (deferred with the deploy target)
 
 **Measured against the Compose stack** (Postgres in the next container -- what Phase 4 projected):
 

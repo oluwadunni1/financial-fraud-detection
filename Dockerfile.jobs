@@ -27,7 +27,9 @@ COPY --from=build /opt/venv /opt/venv
 WORKDIR /app
 COPY --from=build /app/src ./src
 COPY pyproject.toml params.yaml ./
-COPY docker/monitor-loop.sh /usr/local/bin/monitor-loop
+# --chmod: git may not carry the executable bit (it did not -- the CI-built image
+# failed with "monitor-loop: not found" while every local build worked).
+COPY --chmod=755 docker/monitor-loop.sh /usr/local/bin/monitor-loop
 ENV PATH=/opt/venv/bin:$PATH \
     PYTHONUNBUFFERED=1 \
     MPLCONFIGDIR=/tmp

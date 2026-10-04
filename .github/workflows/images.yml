@@ -37,6 +37,7 @@ env:
 
 jobs:
   build:
+    name: build ${{ matrix.image }}
     if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-latest
     timeout-minutes: 45
@@ -54,8 +55,12 @@ jobs:
               and Path('data/graph/card_mapping.json').exists(); print('api image ok')"
           - image: fraud-jobs
             dockerfile: Dockerfile.jobs
+            # The CMD must be executable: a checkout without git's +x bit once
+            # shipped an image whose container could not start.
             smoke: >-
-              python -c "import fraud.monitoring.run, nannyml; print('jobs image ok')"
+              sh -c 'test -x /usr/local/bin/monitor-loop
+              && python -c "import fraud.monitoring.run, nannyml"
+              && echo jobs image ok'
     steps:
       - uses: actions/checkout@v4
         with:
