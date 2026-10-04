@@ -61,6 +61,7 @@ class Predictor:
         max_neighbours: int = 10,
     ):
         self.model = model.eval()
+        self.family = "graphsage"
         self.encoder = encoder
         self.card_mapping = card_mapping
         self.n_card_values = n_card_values
@@ -240,6 +241,7 @@ class XGBoostPredictor:
                 "booster and encoder disagree on feature order -- the encoder must "
                 "ship with the model it was fitted for")
         self.booster = booster
+        self.family = "xgboost"
         self.encoder = encoder
         self.windows_hours = windows_hours
         self.model_version = model_version

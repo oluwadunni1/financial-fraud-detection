@@ -204,6 +204,15 @@ serving:
   # The champion's score decides; the challenger is scored in SHADOW after the
   # response is sent -- logged to predictions.challenger_*, never acted on.
   champion_alias: champion
+  # The alert threshold per model family: the score at 1% FPR on VALIDATION
+  # (2018), frozen -- the rule evaluate.py applies. Not the FPR itself: until
+  # Phase 7 the API compared every score with 0.01, the FPR target, which made
+  # GraphSAGE alert on a large share of legitimate traffic.
+  #   xgboost    reports/metrics_xgb.json            threshold (chosen on val)
+  #   graphsage  reports/metrics_replay_2018.json    metrics.threshold (2018 replay)
+  decision_thresholds:
+    xgboost: 0.0375065
+    graphsage: 0.7145270
   challenger_alias: challenger
   shadow: true
   # How often the API re-resolves both aliases. Moving an alias in the

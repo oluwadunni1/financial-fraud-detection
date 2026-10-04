@@ -466,7 +466,8 @@ def replay_sharded(
     }
 
 
-def http_slice(params: dict, limit: int | None) -> tuple[pl.DataFrame, dt.datetime]:
+def http_slice(params: dict, limit: int | None,
+               start: str | None = None) -> tuple[pl.DataFrame, dt.datetime]:
     """The latency slice, and the graph bound the in-process replay used for it.
 
     The bound is the first row of the slice's year minus one velocity window --
@@ -475,7 +476,7 @@ def http_slice(params: dict, limit: int | None) -> tuple[pl.DataFrame, dt.dateti
     against `metrics_replay.npz` row for row.
     """
     cfg = params["serving"]["latency"]
-    start = dt.datetime.fromisoformat(cfg["start"])
+    start = dt.datetime.fromisoformat(start or cfg["start"])
     processed = repo_path(params["paths"]["processed"])
     scan = pl.scan_parquet(processed / "**/*.parquet", hive_partitioning=True)
     rows = (
@@ -543,7 +544,7 @@ def seed_store(params: dict, conn, rows: pl.DataFrame, graph_since: dt.datetime,
 
 
 def replay_http(params: dict, limit: int | None, reset: bool,
-                api_url: str | None = None) -> dict:
+                api_url: str | None = None, start: str | None = None) -> dict:
     """Send a slice through the running API, one request at a time.
 
     Answers "what does this cost in production?" with the database in the loop,
@@ -563,7 +564,7 @@ def replay_http(params: dict, limit: int | None, reset: bool,
 
     cfg = params["serving"]["latency"]
     hours = params["serving"]["history_hours"]
-    rows, graph_since = http_slice(params, limit)
+    rows, graph_since = http_slice(params, limit, start)
     cursor = rows["ts"].min()
     print(f"slice: {rows.height:,} transactions from {cursor} "
           f"({int(rows['Fraud'].sum())} frauds)")
@@ -708,6 +709,8 @@ def main(argv: list[str] | None = None) -> int:
         "--no-neighbours", action="store_true",
         help="graph-off ablation: score with no card/merchant neighbours, velocity kept",
     )
+    ap.add_argument("--start", default=None,
+                    help="--http: first timestamp of the slice (default serving.latency.start)")
     ap.add_argument("--api-url", default=None,
                     help="--http against an API already running (e.g. the Compose one)")
     ap.add_argument("--label", default="separate",
@@ -716,7 +719,7 @@ def main(argv: list[str] | None = None) -> int:
     args = ap.parse_args(argv)
 
     if args.http:
-        report = replay_http(params, args.limit, args.reset_store, args.api_url)
+        report = replay_http(params, args.limit, args.reset_store, args.api_url, args.start)
         out = repo_path(args.latency_output)
         # Per-request scores beside the summary, so equivalence can be
         # re-checked against a later in-process replay without re-sending.

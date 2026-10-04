@@ -136,3 +136,19 @@ def test_rollback_if_alerting_does_nothing_for_a_healthy_champion(monkeypatch):
     monkeypatch.setattr(P, "_client", lambda params: pytest.fail("must not touch the registry"))
     report = P.rollback(PARAMS, apply=True, if_alerting=True)
     assert report["applied"] is False and report["skipped"] == "champion not alerting"
+
+
+def test_decision_thresholds_are_the_validation_chosen_ones():
+    """Each model alerts at the score where its VALIDATION FPR is 1% -- never at
+    the FPR target itself (the API compared every score with 0.01 until Phase 7)."""
+    import json
+    import pathlib
+
+    from fraud.config import load_params
+
+    thresholds = load_params()["serving"]["decision_thresholds"]
+    xgb = json.loads(pathlib.Path("reports/metrics_xgb.json").read_text())
+    gnn = json.loads(pathlib.Path("reports/metrics_replay_2018.json").read_text())
+    assert xgb["threshold_chosen_on"] == "val" and gnn["years"] == [2018]
+    assert thresholds["xgboost"] == pytest.approx(xgb["threshold"], abs=1e-6)
+    assert thresholds["graphsage"] == pytest.approx(gnn["metrics"]["threshold"], abs=1e-6)

@@ -159,7 +159,6 @@ async def lifespan(app: FastAPI):
     models = Models(params)
     models.refresh()
     _state["models"] = models
-    _state["threshold"] = params["evaluate"]["target_false_positive_rate"]
     # Merged round trips read and write in autocommit: no BEGIN before the read,
     # and the combined write is one atomic statement (decision 22).
     _state["merged"] = bool(params["serving"]["merged_round_trips"])
@@ -261,7 +260,9 @@ def predict(transaction: Transaction, response: Response,
         # 3. Score -- the champion decides.
         with spans.span("score"):
             prediction = champion.score(features, neighbourhood)
-            decision = prediction.score >= _state["threshold"]
+            # Each model's own validation-chosen threshold (params.yaml).
+            threshold = params["serving"]["decision_thresholds"][champion.family]
+            decision = prediction.score >= threshold
 
         # 4. Log, then 5. make visible. Order matters: a row inserted before
         #    scoring would be visible to its own prediction.

@@ -1,118 +1,155 @@
 # Fraud Detection MLOps Platform
 
-An end-to-end MLOps platform for credit-card fraud detection on IBM's TabFormer
-dataset (24,386,900 transactions), built to answer one question:
+An end-to-end MLOps platform for card-fraud detection on IBM's TabFormer dataset
+(24,386,900 transactions, 1991–2020), built to answer one question:
 
 > **Does relational or sequential structure matter more for card fraud?**
 
-Three models compete through **one serving contract and one registry**, so the
-comparison is like-for-like rather than three separate experiments:
+Three models compete through **one serving contract and one registry**, so the answer is
+like-for-like rather than three separate experiments — and the champion/challenger
+machinery gives the registry a real job.
 
-| Model | Inductive bias | Embedding | Status |
-|---|---|---|---|
-| XGBoost | tabular only | — | **champion, registered** |
-| GraphSAGE | relational — who transacts with whom | 64-d, users *and* merchants | next |
-| Foundation model | sequential — the order of a user's transactions | 512-d, users only | planned |
+## The answer
 
-The models are reference implementations. **The platform is the contribution:**
-the reproducible pipeline, the serving architecture, the monitoring, and the
-champion/challenger machinery that makes swapping between them safe.
+Test year 2019: 1,723,938 transactions, 2,087 frauds (a 1-in-826 base rate, so a random
+ranker scores AUC-PR ≈ 0.0012).
 
-## Current results
+| Model | Structure it uses | AUC-PR | P@100 | How it was measured |
+|---|---|---|---|---|
+| XGBoost | tabular (86 features incl. velocity) | 0.2501 | 0.41 | offline = served (features verified equal) |
+| **GraphSAGE** | **relational** — card ↔ transaction ↔ merchant | **0.4665** | **0.71** | **causal replay, served path** — `@champion` |
+| GraphSAGE, neighbourhood removed | — (ablation) | 0.0418 | 0.05 | causal replay |
+| Foundation model + base features | sequential (NVIDIA's 29M decoder, frozen) | 0.2215 | — | offline |
 
-The XGBoost champion, evaluated on 2019 (1,723,938 transactions, 2,087 frauds —
-a 1-in-826 base rate):
+**Relational structure wins, and the ablation shows the graph is doing the work:** remove
+the neighbourhood at scoring time and GraphSAGE falls from 0.4665 to 0.0418. The sequential
+foundation model adds +23% over a same-rows tabular base, but stays below XGBoost trained on
+all history and at half of GraphSAGE.
 
-| Metric | Value | Meaning |
-|---|---|---|
-| **AUC-PR** | **0.3190** | **263x better than random** |
-| Recall @ 1% FPR | 95.4% | catches 1,990 of 2,087 frauds |
-| Precision @ 100 | 0.450 | 45 of the top 100 alerts are real fraud |
-| AUC-ROC | 0.9973 | reported for comparability — see below |
+Every headline is the **served** number: a causal replay scores 2019 in time order through
+the same code path as the API, inserting each transaction only after it is scored, so
+nothing can see its own future. Offline GraphSAGE scored 0.5614; the honest served number
+is 17% lower, and the gap was measured, not hidden (leakage is worth ~1%).
 
-> **Accuracy and ROC-AUC are deliberately not headlined.** At a 1-in-826 base
-> rate, a model predicting "never fraud" scores 99.88% accuracy. The same
-> champion scores 0.997 ROC-AUC while raising 17,025 false alarms. AUC-PR's floor
-> is the base rate itself, which makes "better than chance" unambiguous.
+## The platform
 
-## Why this dataset
-
-Fraud has three properties most portfolio datasets lack:
-
-- **Extreme imbalance** (0.122% positive) forces AUC-PR, precision@k and
-  cost-sensitive thresholds instead of accuracy.
-- **Delayed labels** — chargebacks arrive weeks later, so live accuracy cannot be
-  computed. This is what makes label-free performance estimation load-bearing.
-- **Real concept drift** — the fraud rate swings two orders of magnitude across
-  years in this data, so monitoring has something genuine to detect.
-
-## Architecture
-
-```
-OFFLINE (DVC pipeline)                    ONLINE
-raw CSV                                   FastAPI /predict
-  -> validate      (Pandera)                 <- embeddings   (Supabase/pgvector)
-  -> split         (temporal, asserted)      <- velocity     (live SQL)
-  -> velocity      (shared with serving)     <- champion     (MLflow registry)
-  -> features      (encoder fit on train)
-  -> train         (XGBoost / GraphSAGE)   MONITORING
-  -> evaluate                               NannyML drift + estimated performance
-  -> register      (MLflow alias)
+```mermaid
+flowchart LR
+    subgraph Data["Data & pipeline (DVC, Cloudflare R2)"]
+        CSV[TabFormer CSV<br/>24.4M rows] --> ING[ingest → validate<br/>Pandera] --> SPL[temporal split<br/>≤2017 / 2018 / ≥2019]
+        SPL --> FEAT[features + velocity<br/>one module, two callers]
+        FEAT --> XGB[XGBoost]
+        FEAT --> GNN[GraphSAGE<br/>PyG, T4 GPU]
+        SPL --> FM[foundation model<br/>embeddings]
+    end
+    subgraph Registry["MLflow on DagsHub"]
+        REG[(fraud-champion<br/>@champion · @challenger · @previous)]
+    end
+    XGB & GNN --> GATE{promotion gate<br/>re-scores through registry}
+    GATE --> REG
+    subgraph Serving["Docker Compose"]
+        API[FastAPI /predict<br/>champion decides,<br/>challenger in shadow] <--> PG[(Postgres + pgvector<br/>hot store)]
+        MON[monitoring job<br/>NannyML CBPE + drift]
+    end
+    REG -- alias, re-resolved every 30 s --> API
+    MON --> PG
+    MON -- persistent alert --> RB[rollback] --> REG
 ```
 
-Full design, measured storage budget and phase plan: **[`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)**.
+| Concern | How |
+|---|---|
+| Reproducibility | DVC DAG (19 stages), data + evidence on Cloudflare R2, all config in `params.yaml` |
+| Data quality | Pandera schemas as a pipeline gate |
+| Leakage | temporal split; velocity strictly-earlier offline and online; causal replay score-then-insert |
+| Serving | FastAPI, per-request ~21-node subgraph, 2 DB round trips, **10.4 ms p50 / 15.4 p95** with the DB co-located |
+| Model swaps | MLflow aliases re-resolved at runtime — a promotion reached the running API in ~11 s, no redeploy |
+| Safety | promotion gate re-scores both models **through the registry**; shadow challenger on every request; rollback on persistent alerts |
+| Monitoring | NannyML CBPE estimates performance **without labels** — flagged XGBoost's 2019 decline 89 days before chargebacks could |
+| Explainability | exact TreeSHAP reason codes (XGBoost); exact group Shapley over the subgraph (GraphSAGE) |
+| CI/CD | GitHub Actions: lint + tests in two environments; scheduled monitoring, rollback, keep-alive |
 
 ## Quickstart
 
+Requirements: Docker, [uv](https://docs.astral.sh/uv/), and a `.env` copied from
+`.env.example` with DagsHub (MLflow) credentials — the API loads its models from the
+registry by alias. The R2 keys are needed for `dvc pull`.
+
 ```bash
+# 1. Environment and data
 uv venv --python 3.12
-uv pip install --python .venv/bin/python -e ".[dev]"
+uv pip install --python .venv/bin/python -e ".[dev,api,gnn,notebook]"
+.venv/bin/dvc pull                       # processed data, features, models, evidence
 
-cp .env.example .env          # DagsHub + Supabase credentials
-.venv/bin/dvc repro           # raw CSV -> registered champion
-.venv/bin/python -m pytest    # 117 tests
+# 2. The platform: Postgres + API + monitoring
+docker compose up -d --build
+curl -s localhost:8000/health | jq
+
+# 3. Score a real 2019 fraud that GraphSAGE catches and XGBoost misses
+export DATABASE_URL=postgresql://fraud:fraud@localhost:5433/fraud
+.venv/bin/python -m fraud.jobs.replay --http --api-url http://localhost:8000 \
+    --reset-store --start 2019-02-22T17:00:00 --limit 377 --label demo
+.venv/bin/python -m fraud.demo payload 18267417 > /tmp/fraud.json
+curl -s -X POST localhost:8000/predict -H 'content-type: application/json' -d @/tmp/fraud.json | jq
+.venv/bin/python -m fraud.demo explain 18267417
+
+# 4. The scoreboard and the live system
+.venv/bin/python -m fraud.demo results
+.venv/bin/python -m fraud.demo status
 ```
 
-The champion loads from the registry by alias, so swapping it needs no redeploy:
+Monitoring runs in its own environment (NannyML conflicts with the main one — see
+`pyproject.toml`); `docker compose run --rm monitor python -m fraud.monitoring.run --as-of 2019-11-01`
+runs it in the jobs image.
 
-```python
-mlflow.pyfunc.load_model("models:/fraud-champion@champion")
-```
+## What makes the numbers trustworthy
 
-## Engineering notes
+Most of this project's findings were bugs that returned a confident number rather than an
+error. The checks that caught them are now tests or gates:
 
-A few things measurement contradicted, all documented in `CLAUDE.md`:
-
-- **Refunds are `$-292.00`, not `-$292.00`** — the minus sits inside the dollar
-  sign on 1,244,689 rows. The obvious regex rejects every refund in the dataset.
-- **Velocity features must be strictly causal.** `closed="left"` offline and
-  `ts < :now` online, so two transactions in the same minute are mutually
-  invisible. 142,010 rows share a user and a minute, so this is not academic.
-- **`scale_pos_weight` was swept, not guessed.** The value 10 beat the initial
-  guess of 50 by 29% AUC-PR; full inverse prevalence (819) was the *worst* value
-  on the grid. "Balance the classes" is a trap at this imbalance.
-- **`Year` is not a feature.** The split is temporal, so no training row carries
-  a test year, and a tree cannot extrapolate.
+- **Served == offline, row for row.** The HTTP replay compares every served score with the
+  in-memory causal replay. It caught a stale registered model (decision 23), a missing
+  encoder column, and a neighbour-eviction bug.
+- **The registry holds the evaluated weights.** The promotion gate re-scores sampled 2019
+  transactions through the registry. It found `@champion` v1 was the pre-velocity-fix model.
+- **Edge attribution, not shapes.** Three subgraph defects (4.4×, 8%, 7.5%) passed every
+  shape test; the tests now assert which rows feed which node.
+- **One notion of "previous".** Velocity is computed by one module for training and serving,
+  strictly-earlier on both sides, with a skew test.
+- **Ablations over attribution.** Group Shapley suggested the graph contributed ~15%; the
+  graph-off ablation showed the model collapses without it. The ablation is what decides.
 
 ## Honest limitations
 
-1. TabFormer has only ~2,000 users, so embedding refresh is nearly free here —
-   the pattern is demonstrated, not the scale.
-2. The data is synthetic; drift is simulated rather than organic.
-3. Labels are artificially delayed, not genuinely delayed.
-4. Single-node throughput — no streaming ingest, no horizontal scaling story.
-5. NVIDIA's published numbers are not reproduced: different framework, CPU
-   serving, different feature pipeline.
+- **Synthetic data, ~2,000 users.** TabFormer is generated; drift is the generator's, and a
+  2,000-card graph may not transfer to real issuer scale.
+- **AUC-PR, not dollars.** Thresholds are 1% FPR on validation; a cost-sensitive operating
+  point (fraud losses vs. false-decline costs) is not modelled.
+- **Thin features.** No device, IP, geolocation velocity or dispute history.
+- **Served GraphSAGE is 17% below offline** because serving takes the 10 most recent
+  neighbours, not a sample across the card's history — a recorded latency trade-off.
+- **Short-window velocity has drifted** since training (a 1 h ingest lag *raises* 2019
+  AUC-PR by +0.07, almost all through velocity). The fix is a retrain, not a lag.
+- **The graph ablation proves dependence, not mechanism** — an empty neighbourhood is also
+  out of training distribution; a shuffled-neighbour control would isolate the relationships.
+- **Compose, not cloud.** Deployment target deferred; latency is measured co-located.
 
-## Credits
+## Repository map
 
-Derived from the [NVIDIA AI Blueprint: Financial Fraud Detection](https://github.com/NVIDIA-AI-Blueprints/financial-fraud-detection),
-licensed under Apache 2.0. The original blueprint README is preserved at
-[`docs/NVIDIA_BLUEPRINT_README.md`](docs/NVIDIA_BLUEPRINT_README.md); the graph
-construction logic and the fraud framing come from there. The NGC-gated training
-container and Triton serving path are deliberately not used — see
-`docs/ARCHITECTURE.md` §1.
+| Path | What |
+|---|---|
+| `src/fraud/data/` | fetch, ingest, Pandera schemas, validation, temporal split |
+| `src/fraud/features/` | velocity (shared offline/online), encoders, graph, FM tokenizer |
+| `src/fraud/models/` | XGBoost, GraphSAGE, foundation-model head, registry, **promotion gate** |
+| `src/fraud/api/` | FastAPI app, scorers, Postgres store, subgraph builder, Server-Timing |
+| `src/fraud/jobs/` | causal replay (`--http`, `--no-neighbours`), latency, staleness, load test |
+| `src/fraud/monitoring/` | delayed labels, NannyML CBPE + drift, `drift_metrics` sink, the monthly job |
+| `src/fraud/explain/` | exact TreeSHAP reason codes, GraphSAGE group Shapley |
+| `src/fraud/demo.py` | shell demo helpers: `status`, `results`, `payload`, `explain`, `shadow`, `watch` |
+| `notebooks/phase5/` | monitoring, explainability, staleness & operations experiments (executed) |
+| `sql/` | Postgres schema (Supabase and the Compose database run the same migrations) |
+| `docs/ARCHITECTURE.md` | the full design record, phase by phase |
+| `CLAUDE.md` | 30 settled decisions and the gotchas that silently corrupt results |
 
-Dataset: [IBM TabFormer](https://github.com/IBM/TabFormer), Apache 2.0.
-
-This project remains Apache 2.0 — see [`LICENSE`](LICENSE).
+Built on the [NVIDIA AI Blueprint: Financial Fraud Detection](docs/NVIDIA_BLUEPRINT_README.md)
+and NVIDIA's [transaction foundation model](https://github.com/NVIDIA-AI-Blueprints/transaction-foundation-model);
+the GNN is rebuilt in open PyTorch Geometric.
