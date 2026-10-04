@@ -207,7 +207,23 @@ gnn:
 gnn_causal:
   out_dir: data/graph_causal
   summary: reports/causal_graph_summary.json
-  val_legit_fraction: 0.05     # ~85k legit rows, weighted x20 in val AUC-PR
+  # 1.0 = all of 2018, so val AUC-PR IS the served 2018 number. A 5% legit sample
+  # weighted x20 was tried first: across 30 such samples of v3's 2018 scores the
+  # estimate had sd 0.031 (0.46-0.60) -- as large as the gate's +0.02.
+  val_legit_fraction: 1.0
+  # Step 2: arms trained on those examples, selected on weighted 2018 AUC-PR only
+  # (2019 is touched once, by the winner). Architecture, optimiser, batch and
+  # epochs are `gnn`'s, so v3 is the like-for-like baseline (scored on the same
+  # val examples). pos_weight is swept on `full` (decision 15) and the best value
+  # reused by the other arms. v3's was 10, derived from its 9% training prevalence.
+  models_dir: data/models/gnn_causal
+  metrics: reports/metrics_gnn_causal.json
+  threads: 4                   # training batches are big enough to parallelise
+  pos_weight_sweep: [1, 3, 10]
+  arms:
+    full: {cardholder_history: true, mask_short_velocity: false}
+    no_cardholder_history: {cardholder_history: false, mask_short_velocity: false}
+    no_short_velocity: {cardholder_history: true, mask_short_velocity: true}
 
 serving:
   # Which registry aliases the API serves (decision 14: alias, never a path).

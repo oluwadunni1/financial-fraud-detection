@@ -1013,8 +1013,9 @@ running Postgres, the load generator and the shadow model.
 - [x] **Step 1, `causal_graph` stage** -- 276,969 train / 88,447 val examples, neighbours
       from the full history via `CausalHistory`, 5.9M-row node table (191 MB, R2), 6.5 min
       on CPU. Neighbour fraud rate 0.48% (v3's graph: ~9%). Skew-tested against serving.
-- [ ] Step 2, train the arms (full / no cardholder history / no short-window velocity),
-      select on weighted 2018 AUC-PR, v3 scored on the same val examples
+- [x] **Step 2, `train_gnn_causal`** -- val = all of 2018 (a 5% sample had sd 0.031).
+      v3 0.5267 | full pw1 0.4948, pw3 0.5006, pw10 0.3629 | no cardholder history 0.4928 |
+      **no short-window velocity 0.5638 (+0.037)**. CPU, ~100 s/epoch, 2.6 h for five runs.
 - [ ] Step 3, the winner's 2019 causal replay + graph-off ablation; register v5
 - [ ] Step 4, the gate (>= 0.4865) and, if it passes, the live swap + monitoring reference
 

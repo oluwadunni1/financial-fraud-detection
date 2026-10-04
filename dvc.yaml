@@ -365,6 +365,33 @@ stages:
       - reports/causal_graph_summary.json:
           cache: false
 
+  train_gnn_causal:
+    desc: >
+      GraphSAGE on the causal_graph examples: arms full / no cardholder history /
+      no short-window velocity, pos_weight swept on full, all selected on the
+      full-2018 served AUC-PR. v3 is scored on the same examples as the baseline.
+    cmd: .venv/bin/python -m fraud.models.gnn_causal
+    deps:
+      - data/graph_causal
+      - data/features/encoder.json
+      - data/graph/card_mapping.json
+      - data/models/gnn
+      - reports/metrics_replay_2018.npz
+      - src/fraud/models/gnn_causal.py
+      - src/fraud/models/gnn.py
+      - src/fraud/models/metrics.py
+      - src/fraud/features/causal_graph.py
+      - src/fraud/api/subgraph.py
+    params:
+      - gnn
+      - gnn_causal
+      - velocity.windows_hours
+    outs:
+      - data/models/gnn_causal
+    metrics:
+      - reports/metrics_gnn_causal.json:
+          cache: false
+
   train_gnn:
     desc: >
       Heterogeneous GraphSAGE on the tri-partite graph. Validation AUC-PR peaks

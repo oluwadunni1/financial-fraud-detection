@@ -119,7 +119,8 @@ def val_targets(txns: pl.LazyFrame, fraction: float, seed: int) -> pl.DataFrame:
     frame = txns.select("txn_id", LABEL).collect(engine="streaming").sort("txn_id")
     frauds = frame.filter(pl.col(LABEL) == 1)
     legit = frame.filter(pl.col(LABEL) == 0)
-    legit = legit.sample(n=int(legit.height * fraction), seed=seed, shuffle=False)
+    if fraction < 1.0:
+        legit = legit.sample(n=int(legit.height * fraction), seed=seed, shuffle=False)
     return pl.concat([frauds.with_columns(weight=pl.lit(1.0)),
                       legit.with_columns(weight=pl.lit(1.0 / fraction))]).sort("txn_id")
 

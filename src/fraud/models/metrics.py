@@ -24,12 +24,17 @@ import numpy as np
 from sklearn.metrics import average_precision_score, roc_auc_score, roc_curve
 
 
-def auc_pr(y_true: np.ndarray, y_score: np.ndarray) -> float:
-    """Area under the precision-recall curve (average precision)."""
+def auc_pr(y_true: np.ndarray, y_score: np.ndarray,
+           sample_weight: np.ndarray | None = None) -> float:
+    """Area under the precision-recall curve (average precision).
+
+    `sample_weight` lets a sample stand in for its population: every fraud plus
+    a 5% legit sample weighted x20 estimates the full year's number.
+    """
     if len(np.unique(y_true)) < 2:
         # A split with no positives (2020 alone) has no PR curve to speak of.
         return float("nan")
-    return float(average_precision_score(y_true, y_score))
+    return float(average_precision_score(y_true, y_score, sample_weight=sample_weight))
 
 
 def auc_roc(y_true: np.ndarray, y_score: np.ndarray) -> float:

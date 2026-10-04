@@ -11,17 +11,17 @@
       "neighbour_fraud_rate": 0.004784333497546499
     },
     "val": {
-      "examples": 88447,
+      "examples": 1721615,
       "frauds": 2491,
-      "weighted_rows": 1721611.0,
-      "mean_user_neighbours": 9.998451049781226,
-      "mean_merchant_neighbours": 9.38989451309824,
-      "cold_user": 3,
-      "cold_merchant": 1497,
-      "neighbour_fraud_rate": 0.0022245672340441315
+      "weighted_rows": 1721615.0,
+      "mean_user_neighbours": 9.998813904386289,
+      "mean_merchant_neighbours": 9.393844152147837,
+      "cold_user": 20,
+      "cold_merchant": 29507,
+      "neighbour_fraud_rate": 0.0014475138375429947
     }
   },
-  "nodes": 5899104,
+  "nodes": 6527652,
   "node_features": 62,
-  "seconds": 338.2
+  "seconds": 524.2
 }

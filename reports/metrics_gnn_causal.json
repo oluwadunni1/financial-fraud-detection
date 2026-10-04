@@ -1,0 +1,53 @@
+{
+  "val_examples": 1721615,
+  "val_weighted_rows": 1721615.0,
+  "v3": {
+    "val_weighted_auc_pr": 0.5267090030867578,
+    "replay_2018_auc_pr": 0.5266222657071048,
+    "max_abs_diff_vs_replay": 0.21550029516220093
+  },
+  "runs": {
+    "full-pw1": {
+      "arm": "full",
+      "pos_weight": 1.0,
+      "best_epoch": 18,
+      "val_auc_pr": 0.4947560946199516,
+      "seconds": 2060.2,
+      "model_name": "gnn-causal-full-pw1-epoch18"
+    },
+    "full-pw3": {
+      "arm": "full",
+      "pos_weight": 3.0,
+      "best_epoch": 18,
+      "val_auc_pr": 0.5006237496870728,
+      "seconds": 2039.7,
+      "model_name": "gnn-causal-full-pw3-epoch18"
+    },
+    "full-pw10": {
+      "arm": "full",
+      "pos_weight": 10.0,
+      "best_epoch": 18,
+      "val_auc_pr": 0.3629266933108061,
+      "seconds": 2291.1,
+      "model_name": "gnn-causal-full-pw10-epoch18"
+    },
+    "no_cardholder_history-pw3": {
+      "arm": "no_cardholder_history",
+      "pos_weight": 3.0,
+      "best_epoch": 17,
+      "val_auc_pr": 0.49281938028737754,
+      "seconds": 1271.4,
+      "model_name": "gnn-causal-no_cardholder_history-pw3-epoch17"
+    },
+    "no_short_velocity-pw3": {
+      "arm": "no_short_velocity",
+      "pos_weight": 3.0,
+      "best_epoch": 18,
+      "val_auc_pr": 0.563795525930798,
+      "seconds": 2184.1,
+      "model_name": "gnn-causal-no_short_velocity-pw3-epoch18"
+    }
+  },
+  "winner": "no_short_velocity-pw3",
+  "winner_gain_vs_v3_val": 0.037086522844040126
+}

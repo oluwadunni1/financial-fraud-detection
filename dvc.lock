@@ -932,8 +932,8 @@ stages:
       isexec: true
     - path: src/fraud/features/causal_graph.py
       hash: md5
-      md5: d1cc89280486b37711a2466e7abf7cf3
-      size: 13448
+      md5: bf81cd4265bc2ad4f3fed36cd1cc73f7
+      size: 13475
     - path: src/fraud/features/graph.py
       hash: md5
       md5: b6180dcc144178e95e852a0df0cbd443
@@ -952,7 +952,24 @@ stages:
         gnn_causal:
           out_dir: data/graph_causal
           summary: reports/causal_graph_summary.json
-          val_legit_fraction: 0.05
+          val_legit_fraction: 1.0
+          models_dir: data/models/gnn_causal
+          metrics: reports/metrics_gnn_causal.json
+          threads: 4
+          pos_weight_sweep:
+          - 1
+          - 3
+          - 10
+          arms:
+            full:
+              cardholder_history: true
+              mask_short_velocity: false
+            no_cardholder_history:
+              cardholder_history: false
+              mask_short_velocity: false
+            no_short_velocity:
+              cardholder_history: true
+              mask_short_velocity: true
         serving.history_hours: 168
         serving.neighbours: 10
         split:
@@ -961,10 +978,113 @@ stages:
     outs:
     - path: data/graph_causal
       hash: md5
-      md5: cf7e980b369031fc4675fab5c610b0a9.dir
-      size: 200123429
+      md5: b1c83fd328462cf0d1321b1d2ce10996.dir
+      size: 275552250
       nfiles: 3
     - path: reports/causal_graph_summary.json
       hash: md5
-      md5: 336a5afe0f0a0bb2a9167ae55e45c05e
-      size: 696
+      md5: 4bfe28150fb23428f06d4d76ddaf9c14
+      size: 701
+  train_gnn_causal:
+    cmd: .venv/bin/python -m fraud.models.gnn_causal
+    deps:
+    - path: data/features/encoder.json
+      hash: md5
+      md5: 8e3fa8e6bcbf28f4be11166dbc54488f
+      size: 3500873
+      isexec: true
+    - path: data/graph/card_mapping.json
+      hash: md5
+      md5: dcf3560a0b7cb6aa8314621bc96afc74
+      size: 67727
+      isexec: true
+    - path: data/graph_causal
+      hash: md5
+      md5: b1c83fd328462cf0d1321b1d2ce10996.dir
+      size: 275552250
+      nfiles: 3
+    - path: data/models/gnn
+      hash: md5
+      md5: 5b346df949e9df3bd4a87249be015e10.dir
+      size: 443728
+      nfiles: 2
+    - path: reports/metrics_replay_2018.npz
+      hash: md5
+      md5: 32ee3c1230e4a94ca8fec7d3c8aaadb2
+      size: 24425256
+      isexec: true
+    - path: src/fraud/api/subgraph.py
+      hash: md5
+      md5: d1702d2f244634f58d12020dd1cf545a
+      size: 8817
+      isexec: true
+    - path: src/fraud/features/causal_graph.py
+      hash: md5
+      md5: bf81cd4265bc2ad4f3fed36cd1cc73f7
+      size: 13475
+    - path: src/fraud/models/gnn.py
+      hash: md5
+      md5: 7e0112496f4920e1eb24f948cbc60d74
+      size: 11548
+      isexec: true
+    - path: src/fraud/models/gnn_causal.py
+      hash: md5
+      md5: f73d72d917a819c4c1d91f5c81657650
+      size: 15175
+    - path: src/fraud/models/metrics.py
+      hash: md5
+      md5: 751415ee90f0ada1cbfd3df5600335d3
+      size: 5152
+      isexec: true
+    params:
+      params.yaml:
+        gnn:
+          under_sample: true
+          fraud_ratio: 0.1
+          dedupe_non_fraud: false
+          hidden_channels: 128
+          embedding_dim: 64
+          num_layers: 2
+          num_neighbors:
+          - 25
+          - 10
+          batch_size: 4096
+          learning_rate: 0.001
+          epochs: 20
+          dropout: 0.3
+          random_state: 42
+        gnn_causal:
+          out_dir: data/graph_causal
+          summary: reports/causal_graph_summary.json
+          val_legit_fraction: 1.0
+          models_dir: data/models/gnn_causal
+          metrics: reports/metrics_gnn_causal.json
+          threads: 4
+          pos_weight_sweep:
+          - 1
+          - 3
+          - 10
+          arms:
+            full:
+              cardholder_history: true
+              mask_short_velocity: false
+            no_cardholder_history:
+              cardholder_history: false
+              mask_short_velocity: false
+            no_short_velocity:
+              cardholder_history: true
+              mask_short_velocity: true
+        velocity.windows_hours:
+        - 1
+        - 24
+        - 168
+    outs:
+    - path: data/models/gnn_causal
+      hash: md5
+      md5: a8e0d96c7a4b5c599fc89564a12c9c10.dir
+      size: 2217237
+      nfiles: 10
+    - path: reports/metrics_gnn_causal.json
+      hash: md5
+      md5: dd379b4f32209fbc514357b386dfa95d
+      size: 1466

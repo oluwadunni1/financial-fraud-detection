@@ -128,7 +128,7 @@ These were settled deliberately. Reopen only if new evidence appears.
    subgraph, alongside live velocity aggregates. The original decision was made on latency
    grounds before we had evidence: frozen embeddings score **0.1351** against a 0.2113
    base, while the same GNN end to end scores **0.6474**. Flattening does not merely fail
-   to help, it costs the entire 2x. The subgraph is tiny, the model is ~30k parameters, and
+   to help, it costs the entire 2x. The subgraph is tiny, the model is ~108k parameters (107,585; once misquoted as ~30k), and
    `transaction_events` already carries `idx_txe_user_ts` / `idx_txe_merchant_ts` -- the
    exact two lookups needed, already there for velocity. Cost: torch in the API image
    (~200 MB CPU wheel) and a latency budget that must be re-measured against the <100ms
@@ -285,6 +285,17 @@ These were settled deliberately. Reopen only if new evidence appears.
    1,721,611 weighted rows). Neighbour fraud rate 0.48% train / 0.22% val vs ~9% before.
    `test_built_val_examples_equal_the_serving_graph` re-derives sampled examples through
    `neighbourhood_for` + live velocity + `build_request_graph`: equal to 1e-6.
+34. **Validate a retrain on ALL of 2018, and the short-window velocity is the thing to drop.**
+   A 5% legit sample weighted x20 estimated v3's 2018 AUC-PR with sd 0.031 (0.46-0.60 over
+   30 samples) -- as large as the gate's +0.02 -- so val is the full 1,721,615 rows and IS
+   the served 2018 number (v3: 0.5267, its replay 0.5266). `train_gnn_causal`, 20 epochs,
+   same architecture as v3: full pw1 0.4948 / pw3 0.5006 / pw10 0.3629; no cardholder
+   history 0.4928; **no short-window velocity (1 h aggregates + seconds-since-last zeroed)
+   0.5638, +0.037 over v3** -- the decision-27 drift, now fixed in the model, not ingest.
+   Curves are still rising at epoch 18-19 and swing +-0.1 epoch to epoch, so best-epoch on
+   2018 flatters every arm equally; 2019 decides. The stored `metrics_replay_2018.npz`
+   predates the same-minute fix (2.54% of rows differ; serving agrees with the examples) --
+   regenerate it before it serves as a monitoring reference again.
 29. **Promotion goes through `fraud.models.promote`, never a hand-set alias.** The gate
    re-scores 2019 transactions THROUGH the registry for both candidate and champion (each
    must reproduce its evaluated scores), requires the family's evidence, and demands

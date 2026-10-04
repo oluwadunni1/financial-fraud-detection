@@ -14,7 +14,7 @@ history, or who the card and merchant are? So the players are five groups:
 
 With five players there are 2^5 = 32 coalitions, so the Shapley values are
 computed EXACTLY -- every coalition is scored -- in 32 forward passes of a
-~30k-parameter model (well under a second). No sampling noise, and the values
+~108k-parameter model (well under a second). No sampling noise, and the values
 sum to score(all) - score(none) by construction.
 
 "Absent" must mean something the model has seen, or the attribution measures
