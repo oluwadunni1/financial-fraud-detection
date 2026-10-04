@@ -2,7 +2,7 @@
 
 > The reference doc for this repo: system design, storage budget, phased build plan,
 > verification strategy. Section 6 has the phases; section 10 is the Lightning AI setup.
-> Last updated: 2026-10-04 (Phase 6 built -- GraphSAGE promoted through the gate; Compose stack measured)
+> Last updated: 2026-10-04 (Phase 7 done -- shell demo, README, per-model thresholds; Phase 6 built)
 
 ---
 
@@ -983,9 +983,16 @@ running Postgres, the load generator and the shadow model.
 > orchestration UI is wanted, **Prefect Cloud free tier** gives it with zero infra.
 
 ### Phase 7 — Demo & docs
-- [ ] Streamlit: replay stream, live scores, drift charts, latency, staleness curve
-- [ ] README with architecture diagram and honest limitations section
-- **Done when:** a stranger can follow the README end to end.
+- [~] ~~Streamlit~~ **replaced by a shell demo** (`python -m fraud.demo status | results |
+  payload | explain | shadow | watch`): the demo is given from a terminal, and every view a
+  dashboard would show is one command against the live Compose stack.
+- [x] README with architecture diagram and honest limitations section
+- [x] Live swap demo: rollback -> fraud passes; gate promotion -> caught again (`demo watch`
+  shows every worker on the new alias, ~3-35 s)
+- [x] Per-model decision thresholds (1% FPR on validation) -- the API had compared every
+  score against the FPR target 0.01 itself, found in rehearsal
+- **Done when:** a stranger can follow the README end to end. Rehearsed 2026-10-04: the
+  demo transaction 18267417 scores 0.9928 (GraphSAGE, alert) vs 0.0244 (XGBoost, pass).
 
 ### Phase 8 — Stretch
 - [ ] Neo4j/Memgraph purely as a visual graph explorer (presentation asset, not compute)

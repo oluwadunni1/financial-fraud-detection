@@ -42,6 +42,13 @@ phases; section 10 is the Lightning AI setup.
 
 ## Current state (update as phases complete)
 
+**Phase 7 done (2026-10-04).** The demo is a shell, not Streamlit: `python -m fraud.demo`
+(`status`, `results`, `payload`, `explain`, `shadow`, `watch`) over the Compose stack. The
+rehearsed story is txn 18267417 -- GraphSAGE 0.9928 alert, XGBoost 0.0244 pass -- through a
+live rollback and gate re-promotion. Rehearsal found the API deciding alerts at score >= 0.01
+(the FPR target); thresholds are now per model in `serving.decision_thresholds`. README
+rewritten with results, limitations and a quickstart.
+
 **Phase 6 built (2026-10-04).** GraphSAGE is **@champion** (v3), promoted through the new
 gate; XGBoost v4 scores every request in shadow and is one command from a rollback. The
 graph-off ablation settled the project's question: without its neighbourhood GraphSAGE
