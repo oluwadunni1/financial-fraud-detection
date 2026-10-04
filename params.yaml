@@ -338,6 +338,18 @@ staleness:
   bootstrap: 300              # paired resamples for the AUC-PR difference vs lag 0
   output_dir: reports/staleness
 
+# --- neighbour controls (decision 28's caveat) ---------------------------------
+# The graph-off ablation removed the neighbourhood, which is also out of training
+# distribution. The shuffled control keeps a realistic one -- another card's /
+# merchant's real past, strictly earlier, from an entity of similar 2019 activity
+# -- and breaks only WHOSE it is (`replay --shuffle-neighbours`).
+neighbour_controls:
+  shuffle_seed: 0
+  shuffle_block: 20           # entities per activity rank-block a donor is drawn from
+  bootstrap: 300              # paired resamples, as the staleness experiment
+  top_n: 5000                 # "frauds caught in the top N alerts"
+  output: reports/neighbour_controls.json
+
 # --- promotion and rollback (Phase 6) ------------------------------------------
 # `python -m fraud.models.promote` moves @champion only when the candidate's
 # registered weights reproduce its evaluated scores (decision 23) AND it beats

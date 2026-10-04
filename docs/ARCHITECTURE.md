@@ -943,6 +943,11 @@ centre of the project. Deploy target deferred: Compose-only for now (a decision,
 - [x] **Graph-off ablation, before promoting anything.** All of 2019 replayed with no
       card/merchant neighbours, velocity kept: AUC-PR **0.4665 -> 0.0418**, P@100 0.71 -> 0.05,
       Δ −0.425 [−0.445, −0.404]. The served model depends on its neighbourhood (decision 28).
+- [x] **Shuffled-neighbour control** (2026-10-04, `replay --shuffle-neighbours`,
+      `fraud.jobs.neighbour_controls`): another activity-matched entity's real history.
+      Merchant borrowed **0.0379** (101% of the graph-off loss), both 0.0436 (100%), card
+      borrowed **0.5046** (+0.038 [+0.020, +0.053]). The edge is the merchant relationship;
+      the card history is a net cost in 2019 (decision 31).
 - [x] `Dockerfile.api` (multi-stage, CPU torch, NCCL removed: 2.43 -> **1.9 GB**),
       `Dockerfile.jobs` (the NannyML env, decision 24) -- two images for two environments
 - [x] Compose: `postgres` (pgvector, `sql/` 001-004 applied unchanged) + `api` + `monitor`;

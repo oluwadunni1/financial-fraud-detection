@@ -52,7 +52,8 @@ rewritten with results, limitations and a quickstart.
 **Phase 6 built (2026-10-04).** GraphSAGE is **@champion** (v3), promoted through the new
 gate; XGBoost v4 scores every request in shadow and is one command from a rollback. The
 graph-off ablation settled the project's question: without its neighbourhood GraphSAGE
-falls from **0.4665 to 0.0418** (decision 28). Compose runs Postgres + API + monitoring;
+falls from **0.4665 to 0.0418** (decision 28), and the shuffled control pins it on the
+merchant relationship -- another merchant's real history scores 0.0379 (decision 31). Compose runs Postgres + API + monitoring;
 co-located latency **measured** at **10.4 ms p50 / 15.4 p95**; 3 workers serve ~180 req/s
 with shadow on. A live alias move swapped the running API's champion in 11 s, no redeploy.
 Our CI replaces NVIDIA's. **Operations are live on GitHub (2026-10-04):** the six
@@ -254,8 +255,20 @@ These were settled deliberately. Reopen only if new evidence appears.
    0.4665 -> **0.0418** (P@100 0.71 -> 0.05; Δ −0.425 [−0.445, −0.404]), below XGBoost.
    Phase 5 had read group Shapley (graph ~15% of the push on frauds) as "not the graph";
    wrong -- Shapley on positives measures push from a baseline, not ranking among 1.7M
-   legitimate rows. Caveat: an empty neighbourhood is out of training distribution too, so
-   this proves dependence; a shuffled-neighbour control would isolate the relationships.
+   legitimate rows. The caveat (an empty neighbourhood is out of distribution too) is
+   CLOSED by the shuffled control, decision 31: the model reads THE MERCHANT'S history.
+31. **The edge is the merchant relationship; the card's own history costs AUC-PR.** The
+   shuffled control (`replay --shuffle-neighbours`) gives each card/merchant ANOTHER
+   activity-matched entity's real, strictly-earlier history (same-size neighbourhoods:
+   26,906 vs 29,706 merchant cold starts), velocity and id codes kept. 2019, paired
+   bootstrap vs served 0.4665 (`fraud.jobs.neighbour_controls`):
+   merchant borrowed **0.0379** (Δ −0.429 [−0.448, −0.411], 101% of the graph-off loss);
+   both borrowed 0.0436 (100%); **card borrowed 0.5046** (Δ **+0.038** [+0.020, +0.053]).
+   Borrowing the card history lifts frauds ~+0.5 log-odds whether or not the card had an
+   earlier fraud in its last 10 (+0.53 / +0.48 -- NOT fraud bursts, tested) while legit rows
+   move +0.01. Unexplained; consistent with drift in card-level signals (decision 27). Do
+   not ship a shuffle as a fix -- review the card-history path in the retrain. Donors are a
+   seeded derangement inside rank-blocks of 20 by 2019 activity, identical in every shard.
 29. **Promotion goes through `fraud.models.promote`, never a hand-set alias.** The gate
    re-scores 2019 transactions THROUGH the registry for both candidate and champion (each
    must reproduce its evaluated scores), requires the family's evidence, and demands

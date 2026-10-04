@@ -19,10 +19,17 @@ ranker scores AUC-PR ≈ 0.0012).
 | XGBoost | tabular (86 features incl. velocity) | 0.2501 | 0.41 | offline = served (features verified equal) |
 | **GraphSAGE** | **relational** — card ↔ transaction ↔ merchant | **0.4665** | **0.71** | **causal replay, served path** — `@champion` |
 | GraphSAGE, neighbourhood removed | — (ablation) | 0.0418 | 0.05 | causal replay |
+| GraphSAGE, *another* merchant's history | — (shuffled control) | 0.0379 | 0.13 | causal replay |
+| GraphSAGE, *another* card's history | — (shuffled control) | 0.5046 | 0.71 | causal replay |
 | Foundation model + base features | sequential (NVIDIA's 29M decoder, frozen) | 0.2215 | — | offline |
 
 **Relational structure wins, and the ablation shows the graph is doing the work:** remove
-the neighbourhood at scoring time and GraphSAGE falls from 0.4665 to 0.0418. The sequential
+the neighbourhood at scoring time and GraphSAGE falls from 0.4665 to 0.0418. A shuffled
+control rules out the obvious objection (an empty neighbourhood is simply unfamiliar): give
+each merchant another, equally busy merchant's real history and it falls just as far, to
+0.0379. The signal is *this merchant's* recent activity. The card's own history, by
+contrast, is not helping -- borrowing another card's scores 0.5046 (+0.038 [+0.020, +0.053]),
+an open finding for the retrain. The sequential
 foundation model adds +23% over a same-rows tabular base, but stays below XGBoost trained on
 all history and at half of GraphSAGE.
 
@@ -129,8 +136,8 @@ error. The checks that caught them are now tests or gates:
   neighbours, not a sample across the card's history — a recorded latency trade-off.
 - **Short-window velocity has drifted** since training (a 1 h ingest lag *raises* 2019
   AUC-PR by +0.07, almost all through velocity). The fix is a retrain, not a lag.
-- **The graph ablation proves dependence, not mechanism** — an empty neighbourhood is also
-  out of training distribution; a shuffled-neighbour control would isolate the relationships.
+- **The card's own history lowers 2019 AUC-PR** (shuffled control: +0.038 without it), for
+  reasons not yet established -- it is not fraud bursts. Candidate for the retrain.
 - **Compose, not cloud.** Deployment target deferred; latency is measured co-located.
 
 ## Repository map

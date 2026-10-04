@@ -1,0 +1,60 @@
+{
+  "rows": 1723938,
+  "positives": 2087,
+  "bootstrap": 300,
+  "arms": {
+    "served": {
+      "auc_pr": 0.4664956962718998,
+      "precision_at_100": 0.71,
+      "frauds_in_top_5000": 1544
+    },
+    "graph_off": {
+      "auc_pr": 0.04179392664519993,
+      "precision_at_100": 0.05,
+      "frauds_in_top_5000": 293,
+      "vs_served": {
+        "delta": -0.42470176962669987,
+        "ci_low": -0.445762410495453,
+        "ci_high": -0.4072681169243879,
+        "p_worse": 1.0
+      },
+      "share_of_graph_off_loss": 1.0
+    },
+    "shuffled_card": {
+      "auc_pr": 0.5046055273686156,
+      "precision_at_100": 0.71,
+      "frauds_in_top_5000": 1586,
+      "vs_served": {
+        "delta": 0.03810983109671584,
+        "ci_low": 0.0202982665717734,
+        "ci_high": 0.053412416854469354,
+        "p_worse": 0.0
+      },
+      "share_of_graph_off_loss": -0.0897331582352794
+    },
+    "shuffled_merchant": {
+      "auc_pr": 0.03792578439446714,
+      "precision_at_100": 0.13,
+      "frauds_in_top_5000": 317,
+      "vs_served": {
+        "delta": -0.42856991187743265,
+        "ci_low": -0.4480232124084807,
+        "ci_high": -0.4110117471493657,
+        "p_worse": 1.0
+      },
+      "share_of_graph_off_loss": 1.0091079023620098
+    },
+    "shuffled_both": {
+      "auc_pr": 0.0436020481442849,
+      "precision_at_100": 0.08,
+      "frauds_in_top_5000": 352,
+      "vs_served": {
+        "delta": -0.4228936481276149,
+        "ci_low": -0.44424019072987453,
+        "ci_high": -0.4057269437011363,
+        "p_worse": 1.0
+      },
+      "share_of_graph_off_loss": 0.9957426089825944
+    }
+  }
+}

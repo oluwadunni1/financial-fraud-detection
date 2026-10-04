@@ -102,6 +102,8 @@ def results(params: dict) -> None:
     gnn_offline = _report("reports/metrics_gnn_direct.json")
     served = _report("reports/metrics_replay.json")["metrics"]
     graph_off = _report("reports/metrics_replay_no_neighbours.json")["metrics"]
+    shuffled = {k: _report(f"reports/metrics_replay_shuffled_{k}.json")["metrics"]
+                for k in ("merchant", "card")}
     fm = _report("reports/metrics_fm.json")["headline_test_2019_auc_pr"]
     test19 = xgb["splits"]["test_2019_only"]
 
@@ -116,6 +118,12 @@ def results(params: dict) -> None:
          "P@100": served["precision_at_100"], "how measured": "causal replay, 1.72M rows"},
         {"model": "GraphSAGE, graph removed", "AUC-PR": graph_off["auc_pr"],
          "P@100": graph_off["precision_at_100"], "how measured": "causal replay, ablation"},
+        {"model": "  ...merchant history borrowed", "AUC-PR": shuffled["merchant"]["auc_pr"],
+         "P@100": shuffled["merchant"]["precision_at_100"],
+         "how measured": "causal replay, shuffled control"},
+        {"model": "  ...card history borrowed", "AUC-PR": shuffled["card"]["auc_pr"],
+         "P@100": shuffled["card"]["precision_at_100"],
+         "how measured": "causal replay, shuffled control"},
         {"model": "Foundation model + base, sequential", "AUC-PR": fm["isolated_combined"],
          "P@100": None, "how measured": "offline, NVIDIA extraction"},
     ]).with_columns(pl.col("AUC-PR").round(4),

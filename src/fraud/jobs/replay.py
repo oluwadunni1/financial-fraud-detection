@@ -38,6 +38,7 @@ import datetime as dt
 import json
 import sys
 import time
+from collections.abc import Sequence
 from typing import Any
 
 import numpy as np
@@ -76,7 +77,8 @@ class CausalHistory:
 
     def __init__(self, window_hours: int, merchant_cap: int,
                  visibility_lag_hours: float = 0.0, lag_applies_to: str = "both",
-                 drop_neighbours: bool = False):
+                 drop_neighbours: bool = False,
+                 donors: dict[str, dict] | None = None):
         self.window = dt.timedelta(hours=window_hours)
         self.merchant_cap = merchant_cap
         # The staleness experiment: a row becomes visible only once it is
@@ -92,6 +94,15 @@ class CausalHistory:
         # (its id nodes aggregate nothing) while velocity still reads the card's
         # full history. Whatever survives is what the graph did not contribute.
         self.drop_neighbours = drop_neighbours
+        # The shuffled-neighbour control (`activity_matched_donors`): the graph
+        # reads ANOTHER card's / merchant's real past -- strictly earlier, the
+        # same size, from an entity of similar activity -- while velocity and the
+        # id codes stay the transaction's own. The graph-off ablation removes the
+        # neighbourhood, which is also out of training distribution; this keeps a
+        # realistic neighbourhood and breaks only whose it is.
+        self.donors = donors or {}
+        if self.donors and (self.lag or drop_neighbours):
+            raise ValueError("donors cannot be combined with a visibility lag or drop_neighbours")
         self._users: dict[int, collections.deque] = collections.defaultdict(
             collections.deque
         )
@@ -115,6 +126,13 @@ class CausalHistory:
                 break
             n += 1
         return n
+
+    def _borrowed(self, rows: collections.deque | None, now: dt.datetime) -> pl.DataFrame:
+        """A donor's `merchant_cap` most recent rows strictly before `now`."""
+        if not rows:
+            return EMPTY
+        visible = [r for r in reversed(rows) if r["ts"] < now][: self.merchant_cap]
+        return pl.DataFrame(visible) if visible else EMPTY
 
     def neighbourhood(self, transaction: dict[str, Any]) -> Neighbourhood:
         now = transaction["ts"]
@@ -153,6 +171,16 @@ class CausalHistory:
         if self.drop_neighbours:
             return Neighbourhood(user_history=EMPTY, merchant_history=EMPTY,
                                  velocity_history=user)
+        if self.donors:
+            user_graph, merchant = user, merchant
+            if "user" in self.donors:
+                donor = self.donors["user"].get(transaction["User"])
+                user_graph = self._borrowed(self._users.get(donor), now)
+            if "merchant" in self.donors:
+                donor = self.donors["merchant"].get(str(transaction["Merchant"]))
+                merchant = self._borrowed(self._merchants.get(donor), now)
+            return Neighbourhood(user_history=user_graph, merchant_history=merchant,
+                                 velocity_history=user)
         return Neighbourhood(
             user_history=user, merchant_history=merchant,
             velocity_history=(None if velocity_rows is None
@@ -172,6 +200,48 @@ class CausalHistory:
         keep = self.merchant_cap + self._tied_tail(merchant, row["ts"] - self.lag)
         while len(merchant) > keep:
             merchant.popleft()
+
+
+def activity_matched_donors(ids: Sequence, counts: Sequence[int], seed: int,
+                            block: int) -> dict:
+    """A seeded derangement in which every entity's donor has similar activity.
+
+    Entities are ranked by transaction count and cut into consecutive blocks of
+    `block`; inside a block a random order is rotated by one, so nobody is their
+    own donor and a busy merchant borrows a busy merchant's history. A random
+    donor from the whole population would mostly hand a busy merchant an empty
+    or thin history -- the neighbourhood would differ in SIZE as well as owner,
+    and the control would re-measure the ablation. Fixed for the whole replay
+    (a card always borrows the same donor), and identical in every shard.
+    """
+    order = sorted(range(len(ids)), key=lambda i: (counts[i], str(ids[i])))
+    ranked = [ids[i] for i in order]
+    blocks = [ranked[i:i + block] for i in range(0, len(ranked), block)]
+    if len(blocks) > 1 and len(blocks[-1]) < 2:   # a block of one has no other member
+        blocks[-2].extend(blocks.pop())
+    rng = np.random.default_rng(seed)
+    donors = {}
+    for members in blocks:
+        if len(members) < 2:
+            continue
+        shuffled = [members[i] for i in rng.permutation(len(members))]
+        for i, entity in enumerate(shuffled):
+            donors[entity] = shuffled[(i + 1) % len(shuffled)]
+    return donors
+
+
+def build_donors(rows: pl.DataFrame, shuffle: str, seed: int, block: int) -> dict[str, dict]:
+    """Donor maps for `--shuffle-neighbours {card,merchant,both}`, from the
+    replayed rows' own activity (merchant ids as strings, as history keys them)."""
+    out: dict[str, dict] = {}
+    if shuffle in ("card", "both"):
+        c = rows.group_by("User").len()
+        out["user"] = activity_matched_donors(c["User"].to_list(), c["len"].to_list(), seed, block)
+    if shuffle in ("merchant", "both"):
+        c = rows.group_by("Merchant").len()
+        out["merchant"] = activity_matched_donors(
+            [str(m) for m in c["Merchant"].to_list()], c["len"].to_list(), seed + 1, block)
+    return out
 
 
 def replay_in_process(
@@ -401,7 +471,7 @@ def _run_shard(job: tuple) -> dict:
 
     # The shard's own rows travel with the job (a few MB pickled) rather than
     # being re-read by index, so a slice replays as correctly as a whole year.
-    index, rows, params, model_dir, graph_since, lag_hours, lag_applies_to, drop = job
+    index, rows, params, model_dir, graph_since, lag_hours, lag_applies_to, drop, donors = job
     predictor = Predictor.from_disk(params, model_dir)
     history = CausalHistory(
         window_hours=params["serving"]["history_hours"],
@@ -409,6 +479,7 @@ def _run_shard(job: tuple) -> dict:
         visibility_lag_hours=lag_hours,
         lag_applies_to=lag_applies_to,
         drop_neighbours=drop,
+        donors=donors,
     )
     seeded = seed_history(
         history, params, rows["ts"].min(), params["serving"]["history_hours"],
@@ -425,6 +496,7 @@ def replay_sharded(
     rows: pl.DataFrame, params: dict, years: list[int], model_dir, shards: int,
     lag_hours: float = 0.0, graph_since: dt.datetime | None = None,
     lag_applies_to: str = "both", drop_neighbours: bool = False,
+    donors: dict[str, dict] | None = None,
 ) -> dict:
     """Replay contiguous time ranges in parallel and stitch them back together."""
     import multiprocessing as mp
@@ -444,7 +516,7 @@ def replay_sharded(
         )
     jobs = [
         (i, rows[lo:hi], params, model_dir, graph_since, lag_hours, lag_applies_to,
-         drop_neighbours)
+         drop_neighbours, donors)
         for i, (lo, hi) in enumerate(ranges)
     ]
 
@@ -709,6 +781,14 @@ def main(argv: list[str] | None = None) -> int:
         "--no-neighbours", action="store_true",
         help="graph-off ablation: score with no card/merchant neighbours, velocity kept",
     )
+    ap.add_argument(
+        "--shuffle-neighbours", choices=["card", "merchant", "both"], default=None,
+        help="control: score with another (activity-matched) entity's real history",
+    )
+    controls = params["neighbour_controls"]
+    ap.add_argument("--shuffle-seed", type=int, default=controls["shuffle_seed"])
+    ap.add_argument("--shuffle-block", type=int, default=controls["shuffle_block"],
+                    help="entities per activity block a donor is drawn from")
     ap.add_argument("--start", default=None,
                     help="--http: first timestamp of the slice (default serving.latency.start)")
     ap.add_argument("--api-url", default=None,
@@ -754,16 +834,24 @@ def main(argv: list[str] | None = None) -> int:
     model_dir = repo_path(params["paths"]["models"]) / "gnn"
     predictor = Predictor.from_disk(params, model_dir)
     print(f"model: {predictor.model_version}")
+    if args.shuffle_neighbours and args.no_neighbours:
+        ap.error("--shuffle-neighbours and --no-neighbours are two different controls")
+    donors = (build_donors(rows, args.shuffle_neighbours, args.shuffle_seed, args.shuffle_block)
+              if args.shuffle_neighbours else None)
+    if donors:
+        print("shuffled neighbours: " + ", ".join(
+            f"{k} {len(v):,} donors" for k, v in donors.items()))
 
     if args.shards > 1:
         result = replay_sharded(rows, params, args.years, model_dir, args.shards,
-                                drop_neighbours=args.no_neighbours)
+                                drop_neighbours=args.no_neighbours, donors=donors)
         seeded = -1
     else:
         history = CausalHistory(
             window_hours=params["serving"]["history_hours"],
             merchant_cap=params["serving"]["neighbours"],
             drop_neighbours=args.no_neighbours,
+            donors=donors,
         )
         seeded = seed_history(
             history, params, rows["ts"].min(), params["serving"]["history_hours"]
@@ -785,7 +873,12 @@ def main(argv: list[str] | None = None) -> int:
     latency = result["latency_ms"]
     report = {
         "mode": ("in_process_causal_no_neighbours" if args.no_neighbours
-                 else "in_process_causal"),
+                 else f"in_process_causal_shuffled_{args.shuffle_neighbours}"
+                 if args.shuffle_neighbours else "in_process_causal"),
+        **({"shuffle": {"entities": args.shuffle_neighbours, "seed": args.shuffle_seed,
+                        "block": args.shuffle_block,
+                        "donors": {k: len(v) for k, v in donors.items()}}}
+           if donors else {}),
         "years": args.years,
         "model_version": predictor.model_version,
         "seeded_rows": seeded,

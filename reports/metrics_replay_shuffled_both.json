@@ -1,0 +1,48 @@
+{
+  "mode": "in_process_causal_shuffled_both",
+  "shuffle": {
+    "entities": "both",
+    "seed": 0,
+    "block": 20,
+    "donors": {
+      "user": 1579,
+      "merchant": 34936
+    }
+  },
+  "years": [
+    2019
+  ],
+  "model_version": "gnn-local-epoch19",
+  "seeded_rows": -1,
+  "rows": 1723938,
+  "seconds": 3586.2,
+  "throughput_per_s": 480.7,
+  "cold_start_user": 1655,
+  "cold_start_merchant": 26906,
+  "latency_ms": {
+    "p50": 5.346419000488822,
+    "p95": 16.0746960509641,
+    "p99": 27.082709550395432
+  },
+  "metrics": {
+    "rows": 1723938,
+    "positives": 2087,
+    "base_rate": 0.0012106003812202063,
+    "auc_pr": 0.0436020481442849,
+    "auc_roc": 0.9681304792786238,
+    "threshold": 0.988201916217804,
+    "precision_at_100": 0.08,
+    "recall_at_100": 0.003833253473885961,
+    "precision_at_1000": 0.089,
+    "recall_at_1000": 0.04264494489698131,
+    "confusion": {
+      "tp": 864,
+      "fp": 17218,
+      "tn": 1704633,
+      "fn": 1223
+    },
+    "precision_at_threshold": 0.04778232496405265,
+    "recall_at_fpr_0.01": 0.41399137517968376,
+    "actual_fpr": 0.009999703807123846
+  }
+}

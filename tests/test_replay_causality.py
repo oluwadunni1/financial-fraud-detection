@@ -16,7 +16,12 @@ import datetime as dt
 import polars as pl
 import pytest
 
-from fraud.jobs.replay import CausalHistory, shard_boundaries
+from fraud.jobs.replay import (
+    CausalHistory,
+    activity_matched_donors,
+    build_donors,
+    shard_boundaries,
+)
 
 D = dt.datetime
 VELOCITY = {"velocity_count_1h": 0.0, "velocity_seconds_since_last": -1.0}
@@ -294,3 +299,78 @@ def test_the_graph_off_ablation_keeps_velocity_and_drops_every_neighbour():
     nb = h.neighbourhood(txn(99, user=7, ts=base))
     assert nb.user_history.is_empty() and nb.merchant_history.is_empty()
     assert sorted(nb.velocity_history["txn_id"].to_list()) == [0, 1, 2, 3]
+
+
+# --- the shuffled-neighbour control -------------------------------------------------
+
+def test_donors_are_a_derangement_within_activity_blocks():
+    ids = list(range(100))
+    counts = [i * 3 for i in ids]           # activity rank == id
+    donors = activity_matched_donors(ids, counts, seed=0, block=10)
+    assert set(donors) == set(ids) and sorted(donors.values()) == ids   # a permutation
+    assert all(donors[i] != i for i in ids)                             # nobody keeps their own
+    assert all(abs(donors[i] - i) < 10 for i in ids)                    # similar activity
+    assert donors == activity_matched_donors(ids, counts, seed=0, block=10)   # seeded
+    assert donors != activity_matched_donors(ids, counts, seed=1, block=10)
+
+
+def test_a_lone_last_block_joins_the_one_before():
+    donors = activity_matched_donors(list("abcde"), [1, 2, 3, 4, 5], seed=0, block=2)
+    assert all(donors[k] != k for k in "abcde") and sorted(donors.values()) == list("abcde")
+
+
+def test_build_donors_keys_merchants_as_strings_like_the_history():
+    rows = pl.DataFrame({"User": [1, 1, 2, 3], "Merchant": [10, 11, 10, 12]})
+    both = build_donors(rows, "both", seed=0, block=20)
+    assert set(both["user"]) == {1, 2, 3} and set(both["merchant"]) == {"10", "11", "12"}
+    assert set(build_donors(rows, "card", 0, 20)) == {"user"}
+    assert set(build_donors(rows, "merchant", 0, 20)) == {"merchant"}
+
+
+def _shuffled(entities: dict) -> tuple[CausalHistory, dt.datetime]:
+    h = CausalHistory(window_hours=168, merchant_cap=10, donors=entities)
+    base = D(2019, 6, 1)
+    for i in range(3):   # card 7 at m1
+        h.add(txn(i, user=7, ts=base - dt.timedelta(hours=i + 1), merchant="m1"), {})
+    for i in range(3):   # card 8 at m2
+        h.add(txn(10 + i, user=8, ts=base - dt.timedelta(hours=i + 1), merchant="m2"), {})
+    h.add(txn(20, user=8, ts=base, merchant="m2"), {})   # same minute: never visible
+    return h, base
+
+
+def test_shuffled_card_reads_the_donor_past_and_keeps_its_own_velocity():
+    h, base = _shuffled({"user": {7: 8, 8: 7}})
+    nb = h.neighbourhood(txn(99, user=7, ts=base, merchant="m1"))
+    assert sorted(nb.user_history["txn_id"].to_list()) == [10, 11, 12]       # donor's, ts < now
+    assert sorted(nb.velocity_history["txn_id"].to_list()) == [0, 1, 2]     # its own
+    assert sorted(nb.merchant_history["txn_id"].to_list()) == [0, 1, 2]     # merchant untouched
+
+
+def test_shuffled_merchant_reads_the_donor_merchant_only():
+    h, base = _shuffled({"merchant": {"m1": "m2", "m2": "m1"}})
+    nb = h.neighbourhood(txn(99, user=7, ts=base, merchant="m1"))
+    assert sorted(nb.merchant_history["txn_id"].to_list()) == [10, 11, 12]
+    assert sorted(nb.user_history["txn_id"].to_list()) == [0, 1, 2]
+
+
+def test_shuffle_refuses_to_mix_with_other_controls():
+    with pytest.raises(ValueError):
+        CausalHistory(168, 10, drop_neighbours=True, donors={"user": {1: 2}})
+    with pytest.raises(ValueError):
+        CausalHistory(168, 10, visibility_lag_hours=1, donors={"user": {1: 2}})
+
+
+def test_neighbour_controls_share_is_one_for_a_control_as_bad_as_graph_off():
+    import numpy as np
+
+    from fraud.jobs.neighbour_controls import compare
+
+    rng = np.random.default_rng(0)
+    labels = (rng.uniform(size=3000) < 0.05).astype(int)
+    good = labels * 2.0 + rng.uniform(size=labels.size)
+    noise = rng.uniform(size=labels.size)
+    out = compare(labels, {"served": good, "graph_off": noise, "shuffled_both": noise.copy(),
+                           "shuffled_card": good.copy()}, bootstrap=20, top_n=100)
+    assert out["shuffled_both"]["share_of_graph_off_loss"] == pytest.approx(1.0)
+    assert out["shuffled_card"]["share_of_graph_off_loss"] == pytest.approx(0.0)
+    assert out["shuffled_both"]["vs_served"]["ci_high"] < 0
