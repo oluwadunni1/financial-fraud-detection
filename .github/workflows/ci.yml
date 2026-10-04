@@ -44,7 +44,11 @@ jobs:
       - name: Lint
         run: .venv/bin/python -m ruff check src tests scripts
       - name: Tests
-        run: .venv/bin/python -m pytest -q
+        # The `pytest` entry point, NOT `python -m pytest`: the latter puts the
+        # repo root on sys.path, where NVIDIA's leftover `triton/` config folder
+        # then shadows the triton package torch_geometric probes for. Locally a
+        # real triton (from CUDA torch) wins; on this CPU-torch runner it does not.
+        run: .venv/bin/pytest -q
 
   monitoring:
     name: monitoring tests (.venv-monitoring)
@@ -63,4 +67,4 @@ jobs:
             polars pyarrow matplotlib "psycopg[binary]" pyyaml python-dotenv pytest
           uv pip install --python .venv-monitoring/bin/python -e . --no-deps
       - name: Tests
-        run: .venv-monitoring/bin/python -m pytest -q -p no:cacheprovider tests/test_monitoring.py
+        run: .venv-monitoring/bin/pytest -q -p no:cacheprovider tests/test_monitoring.py

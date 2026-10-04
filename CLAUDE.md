@@ -380,6 +380,10 @@ These were settled deliberately. Reopen only if new evidence appears.
   image uninstalls it and proves at build time that the booster still predicts.
 - **The jobs image needs `libgomp1`**: NannyML imports LightGBM, which links system OpenMP.
 - **Pushing workflow files needs the `workflow` token scope**: `gh auth refresh -s workflow`.
+- **In CI run `pytest`, not `python -m pytest`.** The module form puts the repo root on
+  `sys.path`, where NVIDIA's leftover `triton/` folder shadows the `triton` package that
+  torch_geometric probes for. Locally CUDA torch installs a real triton, which wins; on a
+  CPU-torch runner nothing does, and test collection fails in three files.
 - **Never run a sharded replay from a stdin script.** `spawn` workers re-import `__main__`
   from a file that does not exist and the pool hangs. Use the module entry points.
 - **`source .venv/bin/activate` does NOT change which `python` runs.** The shell profile
