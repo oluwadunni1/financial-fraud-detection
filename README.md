@@ -66,7 +66,7 @@ flowchart LR
 | Safety | promotion gate re-scores both models **through the registry**; shadow challenger on every request; rollback on persistent alerts |
 | Monitoring | NannyML CBPE estimates performance **without labels** — flagged XGBoost's 2019 decline 89 days before chargebacks could |
 | Explainability | exact TreeSHAP reason codes (XGBoost); exact group Shapley over the subgraph (GraphSAGE) |
-| CI/CD | GitHub Actions: lint + tests in two environments; scheduled monitoring, rollback, keep-alive |
+| CI/CD | GitHub Actions: lint + tests in two environments; images built once and published to ghcr.io; scheduled monitoring, rollback, keep-alive |
 
 ## Quickstart
 
@@ -80,8 +80,8 @@ uv venv --python 3.12
 uv pip install --python .venv/bin/python -e ".[dev,api,gnn,notebook]"
 .venv/bin/dvc pull                       # processed data, features, models, evidence
 
-# 2. The platform: Postgres + API + monitoring
-docker compose up -d --build
+# 2. The platform: Postgres + API + monitoring, from the CI-built images on ghcr.io
+docker compose pull && docker compose up -d    # or `up -d --build` to build locally
 curl -s localhost:8000/health | jq
 
 # 3. Score a real 2019 fraud that GraphSAGE catches and XGBoost misses

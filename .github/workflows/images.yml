@@ -1,0 +1,118 @@
+# Build the two container images once, from a commit CI has passed, and publish
+# them to GitHub Container Registry:
+#
+#   ghcr.io/<owner>/fraud-api    Dockerfile.api    FastAPI + both scorers, CPU torch
+#   ghcr.io/<owner>/fraud-jobs   Dockerfile.jobs   the monitoring job (NannyML env)
+#
+# Each is tagged with the commit SHA (immutable: what exactly is running) and
+# `latest` (what `docker compose pull` fetches). The same idea as the model
+# registry, applied to the code: build an artifact once, version it, deploy that.
+#
+# Runs after `ci` succeeds on main -- never publishes an image of code whose tests
+# failed. Model weights are not in either image (the API loads them by alias at
+# runtime), and .dockerignore whitelists code + config, so .env cannot get in.
+# Pushing uses the workflow's own GITHUB_TOKEN: no extra secret. The R2 keys are
+# needed only to `dvc pull` the two DVC-tracked files the API image bakes in.
+
+name: images
+
+on:
+  workflow_run:
+    workflows: [ci]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: images
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  packages: write
+
+env:
+  REGISTRY: ghcr.io
+  SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
+
+jobs:
+  build:
+    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - image: fraud-api
+            dockerfile: Dockerfile.api
+            # Imports the serving path end to end, without starting it (that needs
+            # the registry and a database). Catches a missing dependency or file.
+            smoke: >-
+              python -c "import fraud.api.main, fraud.api.predictor, torch, torch_geometric, xgboost;
+              from pathlib import Path; assert Path('data/features/encoder.json').exists()
+              and Path('data/graph/card_mapping.json').exists(); print('api image ok')"
+          - image: fraud-jobs
+            dockerfile: Dockerfile.jobs
+            smoke: >-
+              python -c "import fraud.monitoring.run, nannyml; print('jobs image ok')"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.SHA }}
+
+      - name: Data the API image bakes in (encoder + card mapping, DVC-tracked)
+        if: matrix.image == 'fraud-api'
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        run: pipx run --spec "dvc[s3]" dvc pull data/features/encoder.json data/graph/card_mapping.json
+
+      - name: Image name
+        id: name
+        # GHCR needs a lowercase path; repository_owner keeps its case.
+        run: echo "ref=${REGISTRY}/${GITHUB_REPOSITORY_OWNER,,}/${{ matrix.image }}" >> "$GITHUB_OUTPUT"
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build (loaded locally for the smoke test)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ${{ matrix.dockerfile }}
+          load: true
+          tags: ${{ steps.name.outputs.ref }}:test
+          cache-from: type=gha,scope=${{ matrix.image }}
+          cache-to: type=gha,scope=${{ matrix.image }},mode=max
+
+      - name: Smoke test
+        run: docker run --rm ${{ steps.name.outputs.ref }}:test ${{ matrix.smoke }}
+
+      - name: Push (rebuild is a cache hit)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ${{ matrix.dockerfile }}
+          push: true
+          tags: |
+            ${{ steps.name.outputs.ref }}:${{ env.SHA }}
+            ${{ steps.name.outputs.ref }}:latest
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.revision=${{ env.SHA }}
+          cache-from: type=gha,scope=${{ matrix.image }}
+
+      - name: Summary
+        run: |
+          {
+            echo "### ${{ matrix.image }}"
+            echo '```'
+            echo "docker pull ${{ steps.name.outputs.ref }}:${{ env.SHA }}"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"

@@ -1,4 +1,8 @@
-# The platform, locally:  docker compose up --build
+# The platform, locally. Two ways to get the images:
+#   docker compose pull && docker compose up -d     the CI-built images from ghcr.io
+#                                                   (images.yml; ~1 min, no build)
+#   docker compose up -d --build                    build from the working tree (~5 min)
+# Pin a commit instead of `latest` with FRAUD_IMAGE_TAG=<full git sha>.
 #
 #   postgres  the hot store: Postgres 17 + pgvector, schema from sql/ applied on
 #             first start (the same four migrations Supabase runs)
@@ -40,7 +44,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.api
-    image: fraud-api:local
+    image: ghcr.io/oluwadunni1/fraud-api:${FRAUD_IMAGE_TAG:-latest}
     env_file: .env
     environment:
       <<: *local-db
@@ -56,7 +60,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.jobs
-    image: fraud-jobs:local
+    image: ghcr.io/oluwadunni1/fraud-jobs:${FRAUD_IMAGE_TAG:-latest}
     env_file: .env
     environment:
       <<: *local-db
@@ -72,7 +76,7 @@ services:
 
   api-supabase:
     profiles: ["supabase"]
-    image: fraud-api:local
+    image: ghcr.io/oluwadunni1/fraud-api:${FRAUD_IMAGE_TAG:-latest}
     env_file: .env           # DATABASE_URL from .env: the live Supabase store
     ports:
       - "8001:8000"
