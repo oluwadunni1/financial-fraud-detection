@@ -16,6 +16,10 @@ The gate, in order -- any failure stops it, and nothing moves:
 3. **The candidate is better where it counts:** 2019 AUC-PR of its evaluated
    scores beats the champion's by `promotion.min_auc_pr_gain`.
 
+Scores and evidence are looked up by each version's `evaluated_model` tag
+(`promotion.evaluated`), never by model family -- so a GraphSAGE retrain is
+judged on its own served number against the GraphSAGE it would replace.
+
 On success: @previous <- old champion, @champion <- candidate, @challenger <-
 old champion (so it keeps scoring in shadow and is one command from a
 rollback). The API picks the change up within `alias_refresh_seconds` -- no
@@ -62,12 +66,32 @@ def family(params: dict, alias: str) -> str:
     raise RuntimeError(f"unknown model family for @{alias}: {sorted(flavours)}")
 
 
-def reference_scores(params: dict, model_family: str) -> pl.DataFrame:
-    z = np.load(repo_path(params["promotion"]["references"][model_family]))
+def evaluated_model(params: dict, alias: str) -> str:
+    """The `evaluated_model` tag of the run behind the version at `alias`."""
+    client = _client(params)
+    version = client.get_model_version_by_alias(
+        params["mlflow"]["registered_model_name"], alias)
+    tag = client.get_run(version.run_id).data.tags.get("evaluated_model")
+    if not tag:
+        raise RuntimeError(f"@{alias} (v{version.version}) has no evaluated_model tag")
+    return tag
+
+
+def evaluation(params: dict, name: str) -> dict:
+    """`promotion.evaluated[name]`, or an error naming what is missing."""
+    entries = params["promotion"]["evaluated"]
+    if name not in entries:
+        raise KeyError(f"no evaluation recorded for {name!r} in promotion.evaluated "
+                       f"(known: {sorted(entries)})")
+    return entries[name]
+
+
+def reference_scores(params: dict, name: str) -> pl.DataFrame:
+    z = np.load(repo_path(evaluation(params, name)["scores"]))
     return pl.DataFrame({"txn_id": z["txn_id"], "score": z["score"], "label": z["label"]})
 
 
-def verify_registry(params: dict, alias: str, model_family: str) -> dict:
+def verify_registry(params: dict, alias: str, model_family: str, name: str) -> dict:
     """Re-score sampled 2019 transactions through the registry; compare."""
     import torch
 
@@ -77,7 +101,7 @@ def verify_registry(params: dict, alias: str, model_family: str) -> dict:
     torch.set_num_threads(1)
     cfg = params["promotion"]
     scorer = load_scorer(params, alias)
-    reference = reference_scores(params, model_family)
+    reference = reference_scores(params, name)
     sample = reference.sample(cfg["verify_rows"], seed=7)["txn_id"].to_list()
     rows = (pl.scan_parquet(repo_path(params["paths"]["processed"]) / "**/*.parquet",
                             hive_partitioning=True)
@@ -92,19 +116,26 @@ def verify_registry(params: dict, alias: str, model_family: str) -> dict:
         diffs.append(abs(got - expected[txn["txn_id"]]))
     worst = float(max(diffs))
     return {"alias": alias, "version": scorer.model_version, "family": model_family,
-            "rows": len(diffs), "max_abs_diff": worst,
+            "evaluated_model": name, "rows": len(diffs), "max_abs_diff": worst,
             "passed": worst <= cfg["verify_tolerance"]}
 
 
 def gate(params: dict, candidate_alias: str) -> dict:
     cfg = params["promotion"]
-    champ_family = family(params, params["serving"]["champion_alias"])
-    cand_family = family(params, candidate_alias)
+    champion_alias = params["serving"]["champion_alias"]
     report: dict = {"candidate_alias": candidate_alias, "checks": []}
+    names = {}
+    for alias in (candidate_alias, champion_alias):
+        names[alias] = evaluated_model(params, alias)
+        if names[alias] not in cfg["evaluated"]:
+            report.update(passed=False, reason=(
+                f"@{alias} was evaluated as {names[alias]!r}, which has no entry in "
+                "promotion.evaluated -- no scores to judge it on"))
+            return report
+    cand_name, champ_name = names[candidate_alias], names[champion_alias]
 
-    for alias, fam in ((candidate_alias, cand_family),
-                       (params["serving"]["champion_alias"], champ_family)):
-        check = verify_registry(params, alias, fam)
+    for alias in (candidate_alias, champion_alias):
+        check = verify_registry(params, alias, family(params, alias), names[alias])
         report["checks"].append({"check": f"registry @{alias} reproduces its evaluation", **check})
         if not check["passed"]:
             report["passed"] = False
@@ -112,20 +143,22 @@ def gate(params: dict, candidate_alias: str) -> dict:
                                 f"evaluated scores: max diff {check['max_abs_diff']:.2e}")
             return report
 
-    missing = [p for p in cfg["evidence"].get(cand_family, []) if not repo_path(p).exists()]
+    missing = [p for p in evaluation(params, cand_name)["evidence"]
+               if not repo_path(p).exists()]
     report["checks"].append({"check": "evidence present", "missing": missing,
                              "passed": not missing})
     if missing:
         report.update(passed=False, reason=f"missing evidence: {missing}")
         return report
 
-    def year_auc(fam: str) -> float:
-        ref = reference_scores(params, fam)
+    def year_auc(name: str) -> float:
+        ref = reference_scores(params, name)
         return auc_pr(ref["label"].to_numpy(), ref["score"].to_numpy())
 
-    cand, champ = year_auc(cand_family), year_auc(champ_family)
+    cand, champ = year_auc(cand_name), year_auc(champ_name)
     gain = cand - champ
-    report["checks"].append({"check": "beats the champion", "candidate_auc_pr": cand,
+    report["checks"].append({"check": "beats the champion", "candidate": cand_name,
+                             "champion": champ_name, "candidate_auc_pr": cand,
                              "champion_auc_pr": champ, "gain": gain,
                              "required": cfg["min_auc_pr_gain"],
                              "passed": gain >= cfg["min_auc_pr_gain"]})
@@ -163,12 +196,14 @@ def champion_alerting(params: dict) -> dict:
     """Is the live champion in a PERSISTENT degradation alert right now?
 
     Reads what the monitoring job wrote (decision 25): the newest monthly
-    estimate for the champion's model family, from the newest run. The alert
-    flag there already requires `persistence_months` consecutive flagged months.
+    estimate for the champion's monitoring key (`promotion.evaluated[...]
+    .monitoring`), from the newest run. The alert flag there already requires
+    `persistence_months` consecutive flagged months.
     """
     from fraud.api import store
 
-    fam = family(params, params["serving"]["champion_alias"])
+    fam = evaluation(params, evaluated_model(params, params["serving"]["champion_alias"]))[
+        "monitoring"]
     with store.connect() as conn, conn.cursor() as cur:
         cur.execute(
             """

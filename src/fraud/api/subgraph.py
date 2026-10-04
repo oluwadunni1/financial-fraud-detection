@@ -117,24 +117,54 @@ def build_request_graph(
     encoded = encoder.transform_rows(rows)[:, keep]
     x_txn = torch.from_numpy(np.ascontiguousarray(encoded))
 
-    # --- id nodes -----------------------------------------------------------
+    user_x, merchant_x = id_node_features(transaction, encoder, card_mapping, n_card_values)
+    return assemble_request_graph(x_txn, user_x, merchant_x, n_user_rows, n_merchant_rows)
+
+
+def id_node_features(
+    transaction: dict[str, Any],
+    encoder: Encoder,
+    card_mapping: dict[str, int],
+    n_card_values: int,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """The arriving transaction's card and merchant identity codes (1 x width each).
+
+    Split out of `build_request_graph` so the causal training graphs
+    (`fraud.features.causal_graph`) build id nodes with THIS function, not a copy.
+    """
     # The same formula combined_card_id() encodes, evaluated directly -- a
     # one-row polars frame is not worth building for two integers.
     card_id = int(transaction["User"]) * n_card_values + int(transaction["Card"])
     merchant = str(transaction["Merchant"])
-
-    data = HeteroData()
-    data[TXN].x = x_txn
-    data[USER].x = torch.tensor(
-        [_binary_code(str(card_id), card_mapping)], dtype=torch.float32
-    )
-    data[MERCHANT].x = torch.tensor(
+    user_x = torch.tensor([_binary_code(str(card_id), card_mapping)], dtype=torch.float32)
+    merchant_x = torch.tensor(
         [
             _binary_code(merchant, encoder.binary["Merchant"])
             + _binary_code(str(int(transaction["MCC"])), encoder.binary["MCC"])
         ],
         dtype=torch.float32,
     )
+    return user_x, merchant_x
+
+
+def assemble_request_graph(
+    x_txn: torch.Tensor,
+    user_x: torch.Tensor,
+    merchant_x: torch.Tensor,
+    n_user_rows: int,
+    n_merchant_rows: int,
+) -> HeteroData:
+    """Wire node features into the request graph.
+
+    `x_txn` row 0 is the arriving transaction, then `n_user_rows` card rows, then
+    `n_merchant_rows` merchant rows. Shared by serving and the causal training
+    graphs, so the edge layout -- the part that was wrong three times (CLAUDE.md
+    gotchas) -- exists exactly once.
+    """
+    data = HeteroData()
+    data[TXN].x = x_txn
+    data[USER].x = user_x
+    data[MERCHANT].x = merchant_x
 
     # The model is 2-layer, so the arriving transaction's representation is
     # f(its own features, user_node^(1), merchant_node^(1)) -- and those two are

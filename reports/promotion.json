@@ -4,19 +4,21 @@
     {
       "check": "registry @challenger reproduces its evaluation",
       "alias": "challenger",
-      "version": "fraud-champion@challenger:v3",
-      "family": "graphsage",
+      "version": "fraud-champion@challenger:v4",
+      "family": "xgboost",
+      "evaluated_model": "xgb-local-best200",
       "rows": 25,
-      "max_abs_diff": 2.9802322387695312e-08,
+      "max_abs_diff": 0.0,
       "passed": true
     },
     {
       "check": "registry @champion reproduces its evaluation",
       "alias": "champion",
-      "version": "fraud-champion@champion:v4",
-      "family": "xgboost",
+      "version": "fraud-champion@champion:v3",
+      "family": "graphsage",
+      "evaluated_model": "gnn-local-epoch19",
       "rows": 25,
-      "max_abs_diff": 0.0,
+      "max_abs_diff": 2.9802322387695312e-08,
       "passed": true
     },
     {
@@ -26,15 +28,18 @@
     },
     {
       "check": "beats the champion",
-      "candidate_auc_pr": 0.4664956962718998,
-      "champion_auc_pr": 0.25012668376265973,
-      "gain": 0.21636901250924007,
+      "candidate": "xgb-local-best200",
+      "champion": "gnn-local-epoch19",
+      "candidate_auc_pr": 0.25012668376265973,
+      "champion_auc_pr": 0.4664956962718998,
+      "gain": -0.21636901250924007,
       "required": 0.02,
-      "passed": true
+      "passed": false
     }
   ],
-  "passed": true,
-  "champion_before": "4",
-  "candidate": "3",
-  "applied": true
+  "passed": false,
+  "reason": "gain -0.2164 below the required 0.02",
+  "champion_before": "3",
+  "candidate": "4",
+  "applied": false
 }

@@ -902,3 +902,69 @@ stages:
       hash: md5
       md5: a9f6a50b1799f6648970fa38ca74dc0c
       size: 12998
+  causal_graph:
+    cmd: .venv/bin/python -m fraud.features.causal_graph
+    deps:
+    - path: data/features/encoder.json
+      hash: md5
+      md5: 8e3fa8e6bcbf28f4be11166dbc54488f
+      size: 3500873
+      isexec: true
+    - path: data/features/matrix
+      hash: md5
+      md5: f4dd8f400cac419fae6909e1f5ef8295.dir
+      size: 803720534
+      nfiles: 30
+    - path: data/features/velocity
+      hash: md5
+      md5: 9c62b8c989af7374a03344c84eec55ea.dir
+      size: 623072966
+      nfiles: 227
+    - path: data/processed
+      hash: md5
+      md5: 3967e7aa9b864da7a3802222d282d56c.dir
+      size: 563670306
+      nfiles: 30
+    - path: src/fraud/api/subgraph.py
+      hash: md5
+      md5: d1702d2f244634f58d12020dd1cf545a
+      size: 8817
+      isexec: true
+    - path: src/fraud/features/causal_graph.py
+      hash: md5
+      md5: d1cc89280486b37711a2466e7abf7cf3
+      size: 13448
+    - path: src/fraud/features/graph.py
+      hash: md5
+      md5: b6180dcc144178e95e852a0df0cbd443
+      size: 13868
+      isexec: true
+    - path: src/fraud/jobs/replay.py
+      hash: md5
+      md5: 4faf78cbf37011f1044209309d834222
+      size: 42003
+      isexec: true
+    params:
+      params.yaml:
+        gnn.dedupe_non_fraud: false
+        gnn.fraud_ratio: 0.1
+        gnn.random_state: 42
+        gnn_causal:
+          out_dir: data/graph_causal
+          summary: reports/causal_graph_summary.json
+          val_legit_fraction: 0.05
+        serving.history_hours: 168
+        serving.neighbours: 10
+        split:
+          train_end_year: 2017
+          val_year: 2018
+    outs:
+    - path: data/graph_causal
+      hash: md5
+      md5: cf7e980b369031fc4675fab5c610b0a9.dir
+      size: 200123429
+      nfiles: 3
+    - path: reports/causal_graph_summary.json
+      hash: md5
+      md5: 336a5afe0f0a0bb2a9167ae55e45c05e
+      size: 696

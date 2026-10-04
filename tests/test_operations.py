@@ -17,8 +17,13 @@ PARAMS = {
                 "shadow": True, "alias_refresh_seconds": 30},
     "mlflow": {"registered_model_name": "fraud-champion"},
     "promotion": {"min_auc_pr_gain": 0.02, "verify_rows": 5, "verify_tolerance": 1e-5,
-                  "references": {"xgboost": "x.npz", "graphsage": "g.npz"},
-                  "evidence": {"graphsage": ["evidence.json"]}},
+                  "evaluated": {
+                      "xgb-a": {"scores": "x.npz", "evidence": [], "monitoring": "xgboost"},
+                      "gnn-a": {"scores": "g.npz", "evidence": ["evidence.json"],
+                                "monitoring": "graphsage"},
+                      "gnn-b": {"scores": "g2.npz", "evidence": ["evidence.json"],
+                                "monitoring": "graphsage-b"},
+                  }},
 }
 
 
@@ -79,25 +84,28 @@ def test_a_failed_load_leaves_the_old_model_serving(monkeypatch):
 
 # --- the gate --------------------------------------------------------------------
 
-def _gate(monkeypatch, tmp_path, *, verified=True, gain=0.2, evidence=True):
+def _gate(monkeypatch, tmp_path, *, verified=True, gain=0.2, evidence=True,
+          names=("gnn-a", "xgb-a")):
     import fraud.models.promote as P
 
     monkeypatch.chdir(tmp_path)
     if evidence:
         (tmp_path / "evidence.json").write_text("{}")
+    tags = {"challenger": names[0], "champion": names[1]}
     monkeypatch.setattr(P, "repo_path", lambda p: tmp_path / p)
+    monkeypatch.setattr(P, "evaluated_model", lambda params, alias: tags[alias])
     monkeypatch.setattr(P, "family", lambda params, alias:
-                        "graphsage" if alias == "challenger" else "xgboost")
-    monkeypatch.setattr(P, "verify_registry", lambda params, alias, fam: {
-        "alias": alias, "version": "v", "family": fam, "rows": 5,
+                        "xgboost" if tags[alias].startswith("xgb") else "graphsage")
+    monkeypatch.setattr(P, "verify_registry", lambda params, alias, fam, name: {
+        "alias": alias, "version": "v", "family": fam, "evaluated_model": name, "rows": 5,
         "max_abs_diff": 0.0 if verified else 0.2, "passed": verified})
     rng = np.random.default_rng(0)
     labels = (rng.uniform(size=4000) < 0.05).astype(int)
 
-    def ref(params, fam):
+    def ref(params, name):
         # Overlapping classes, so AUC-PR moves with `quality` instead of
-        # saturating at 1.0 for both models.
-        quality = 0.3 + (gain if fam == "graphsage" else 0.0)
+        # saturating at 1.0 for both models. The candidate is better by `gain`.
+        quality = 0.3 + (gain if name == names[0] else 0.0)
         score = labels * quality + rng.uniform(size=labels.size)
         return pl.DataFrame({"txn_id": np.arange(labels.size), "score": score, "label": labels})
 
@@ -124,6 +132,30 @@ def test_gate_refuses_without_the_evidence(monkeypatch, tmp_path):
 def test_gate_refuses_a_model_that_is_not_better_enough(monkeypatch, tmp_path):
     report = _gate(monkeypatch, tmp_path, gain=0.0)
     assert not report["passed"] and "below the required" in report["reason"]
+
+
+def test_two_versions_of_one_family_are_judged_on_their_own_scores(monkeypatch, tmp_path):
+    # GraphSAGE v5 vs GraphSAGE v3: a family-keyed lookup would hand both the
+    # same file and compare the model with itself (gain exactly 0).
+    better = _gate(monkeypatch, tmp_path, names=("gnn-b", "gnn-a"))
+    assert better["passed"]
+    beats = [c for c in better["checks"] if c["check"] == "beats the champion"][0]
+    assert (beats["candidate"], beats["champion"]) == ("gnn-b", "gnn-a")
+    assert beats["gain"] > 0.02
+
+
+def test_a_version_with_no_recorded_evaluation_cannot_be_promoted(monkeypatch, tmp_path):
+    report = _gate(monkeypatch, tmp_path, names=("gnn-unknown", "gnn-a"))
+    assert not report["passed"] and "no entry in promotion.evaluated" in report["reason"]
+
+
+def test_every_evaluated_model_points_at_a_monitored_key():
+    from fraud.config import load_params
+
+    params = load_params()
+    for name, entry in params["promotion"]["evaluated"].items():
+        assert set(entry) == {"scores", "evidence", "monitoring"}, name
+        assert entry["monitoring"] in params["monitoring"]["scores"], name
 
 
 @pytest.mark.parametrize("passed, code", [(True, 0), (False, 3)])

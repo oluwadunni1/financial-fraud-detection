@@ -1,0 +1,27 @@
+{
+  "splits": {
+    "train": {
+      "examples": 276969,
+      "frauds": 25179,
+      "weighted_rows": 276969.0,
+      "mean_user_neighbours": 9.99563128003495,
+      "mean_merchant_neighbours": 9.789871790705819,
+      "cold_user": 19,
+      "cold_merchant": 2211,
+      "neighbour_fraud_rate": 0.004784333497546499
+    },
+    "val": {
+      "examples": 88447,
+      "frauds": 2491,
+      "weighted_rows": 1721611.0,
+      "mean_user_neighbours": 9.998451049781226,
+      "mean_merchant_neighbours": 9.38989451309824,
+      "cold_user": 3,
+      "cold_merchant": 1497,
+      "neighbour_fraud_rate": 0.0022245672340441315
+    }
+  },
+  "nodes": 5899104,
+  "node_features": 62,
+  "seconds": 338.2
+}

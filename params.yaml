@@ -199,6 +199,16 @@ gnn:
   dropout: 0.3
   random_state: 42
 
+# Training examples with the neighbourhood SERVING sees (the retrain, decisions 18
+# and 31): each example's card/merchant neighbours are what `CausalHistory`
+# returns walking the FULL history in time order -- not the under-sampled,
+# time-scrambled pool of `build_graph`. Train targets are v3's (gnn.fraud_ratio,
+# gnn.random_state); val is every 2018 fraud + a weighted legit sample.
+gnn_causal:
+  out_dir: data/graph_causal
+  summary: reports/causal_graph_summary.json
+  val_legit_fraction: 0.05     # ~85k legit rows, weighted x20 in val AUC-PR
+
 serving:
   # Which registry aliases the API serves (decision 14: alias, never a path).
   # The champion's score decides; the challenger is scored in SHADOW after the
@@ -360,8 +370,19 @@ promotion:
   min_auc_pr_gain: 0.02
   verify_rows: 25              # 2019 transactions re-scored through the registry
   verify_tolerance: 1.0e-5
-  references:                  # per model family: the evaluated 2019 scores
-    xgboost: reports/scores_xgb_2019.npz
-    graphsage: reports/metrics_replay.npz
-  evidence:                    # reports a family must have before it can be champion
-    graphsage: [reports/metrics_replay_no_neighbours.json]
+  # Keyed by the registered version's `evaluated_model` tag, NOT by model family:
+  # two GraphSAGE versions must each be judged on their OWN served scores (a
+  # family key would hand v5 and v3 the same file and the gate would compare a
+  # model with itself). A version with no entry here cannot be promoted.
+  #   scores      its evaluated 2019 scores (the served number for GraphSAGE)
+  #   evidence    reports it must have before it can be champion
+  #   monitoring  its key in `monitoring.scores` / drift_metrics.model
+  evaluated:
+    xgb-local-best200:
+      scores: reports/scores_xgb_2019.npz
+      evidence: []
+      monitoring: xgboost
+    gnn-local-epoch19:
+      scores: reports/metrics_replay.npz
+      evidence: [reports/metrics_replay_no_neighbours.json]
+      monitoring: graphsage

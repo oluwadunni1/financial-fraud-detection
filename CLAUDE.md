@@ -110,7 +110,7 @@ subgraph, p50 5.4ms / p95 13.0ms in-process (the database is measured in Phase 4
 | Containers | **Done** -- `Dockerfile.api` (1.9 GB), `Dockerfile.jobs`, `docker-compose.yml` (postgres + api + monitor); built by CI (`images.yml`) to `ghcr.io/oluwadunni1/fraud-{api,jobs}`, `docker compose pull` |
 | Load | **Measured** -- co-located p50 10.4 / p95 15.4 ms; ~180 req/s at 3 workers, shadow on |
 | CI/CD | **Live** -- `ci.yml` (lint+tests, 2 envs) green; `operate.yml` (weekly keep-alive, monthly monitor + auto-rollback, manual gate) with secrets set |
-| Tests | **317 passing** in `.venv` across 22 files, **14** under `.venv-monitoring` |
+| Tests | **332 passing** in `.venv` across 23 files, **14** under `.venv-monitoring` |
 
 Measured dataset facts now live in `docs/ARCHITECTURE.md` section 2.1. Read that before
 writing any feature code -- several of them contradict what the scaffolding assumed.
@@ -269,6 +269,22 @@ These were settled deliberately. Reopen only if new evidence appears.
    move +0.01. Unexplained; consistent with drift in card-level signals (decision 27). Do
    not ship a shuffle as a fix -- review the card-history path in the retrain. Donors are a
    seeded derangement inside rank-blocks of 20 by 2019 activity, identical in every shard.
+32. **The gate judges a VERSION by its `evaluated_model` tag, never by model family.**
+   `promotion.evaluated[<tag>]` holds its 2019 scores, evidence and monitoring key. Keyed
+   by family, GraphSAGE v5 vs v3 would read one file and compare a model with itself. A
+   version whose tag has no entry is refused. Every new registered version needs an entry.
+33. **GraphSAGE trains on the neighbourhood serving builds (`causal_graph` stage).** v3's
+   training graph and serving disagree three ways: the neighbour pool was the UNDER-SAMPLED
+   rows (~9% fraud; serving's real history 0.12%), neighbours were sampled across 1991-2017
+   including later ones (serving: 10 most recent, strictly earlier), and its user node was a
+   CARD while serving reads the CARDHOLDER (`user_id`; 72% of 2019 holders use 2+ cards).
+   The stage walks the full history through the replay's own `CausalHistory` and records
+   each example's neighbour ids; features come from the matrix; id nodes and edges from
+   `subgraph.id_node_features` / `assemble_request_graph` -- the serving functions. Train
+   targets = v3's (276,969); val = every 2018 fraud + 5% legit weighted x20 (88,447,
+   1,721,611 weighted rows). Neighbour fraud rate 0.48% train / 0.22% val vs ~9% before.
+   `test_built_val_examples_equal_the_serving_graph` re-derives sampled examples through
+   `neighbourhood_for` + live velocity + `build_request_graph`: equal to 1e-6.
 29. **Promotion goes through `fraud.models.promote`, never a hand-set alias.** The gate
    re-scores 2019 transactions THROUGH the registry for both candidate and champion (each
    must reproduce its evaluated scores), requires the family's evidence, and demands

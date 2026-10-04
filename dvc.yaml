@@ -336,6 +336,35 @@ stages:
       - reports/graph_summary.json:
           cache: false
 
+  causal_graph:
+    desc: >
+      Training examples carrying the neighbourhood serving sees: the cardholder's
+      and merchant's 10 most recent strictly-earlier transactions from the FULL
+      history, selected by the replay's own CausalHistory. Under-sampling picks
+      the examples, never their neighbours.
+    cmd: .venv/bin/python -m fraud.features.causal_graph
+    deps:
+      - data/processed
+      - data/features/matrix
+      - data/features/velocity
+      - data/features/encoder.json
+      - src/fraud/features/causal_graph.py
+      - src/fraud/features/graph.py
+      - src/fraud/jobs/replay.py
+      - src/fraud/api/subgraph.py
+    params:
+      - gnn_causal
+      - gnn.fraud_ratio
+      - gnn.random_state
+      - gnn.dedupe_non_fraud
+      - serving.neighbours
+      - serving.history_hours
+      - split
+    outs:
+      - data/graph_causal
+      - reports/causal_graph_summary.json:
+          cache: false
+
   train_gnn:
     desc: >
       Heterogeneous GraphSAGE on the tri-partite graph. Validation AUC-PR peaks

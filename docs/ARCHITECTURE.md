@@ -1007,6 +1007,17 @@ running Postgres, the load generator and the shadow model.
 - **Done when:** a stranger can follow the README end to end. Rehearsed 2026-10-04: the
   demo transaction 18267417 scores 0.9928 (GraphSAGE, alert) vs 0.0244 (XGBoost, pass).
 
+### Retrain — GraphSAGE on the served neighbourhood (decisions 31-33)
+- [x] **Step 0, gate per version** -- `promotion.evaluated` keyed by `evaluated_model`;
+      the live dry run reads both tags and verifies both models
+- [x] **Step 1, `causal_graph` stage** -- 276,969 train / 88,447 val examples, neighbours
+      from the full history via `CausalHistory`, 5.9M-row node table (191 MB, R2), 6.5 min
+      on CPU. Neighbour fraud rate 0.48% (v3's graph: ~9%). Skew-tested against serving.
+- [ ] Step 2, train the arms (full / no cardholder history / no short-window velocity),
+      select on weighted 2018 AUC-PR, v3 scored on the same val examples
+- [ ] Step 3, the winner's 2019 causal replay + graph-off ablation; register v5
+- [ ] Step 4, the gate (>= 0.4865) and, if it passes, the live swap + monitoring reference
+
 ### Phase 8 — Stretch
 - [ ] Neo4j/Memgraph purely as a visual graph explorer (presentation asset, not compute)
 - [ ] Tiered refresh (hot entities hourly, long tail weekly)
