@@ -55,7 +55,9 @@ graph-off ablation settled the project's question: without its neighbourhood Gra
 falls from **0.4665 to 0.0418** (decision 28). Compose runs Postgres + API + monitoring;
 co-located latency **measured** at **10.4 ms p50 / 15.4 p95**; 3 workers serve ~180 req/s
 with shadow on. A live alias move swapped the running API's champion in 11 s, no redeploy.
-Our CI replaces NVIDIA's; the GitHub push of it waits on the `workflow` token scope.
+Our CI replaces NVIDIA's. **Operations are live on GitHub (2026-10-04):** the six
+secrets are set (`scripts/set_github_secrets.sh`), keep-alive, the gate and the monitor
+job each verified by a dispatched run.
 
 **Phase 5 done (2026-10-03).** Three notebooks on production code
 (`notebooks/phase5/`). Without a single label, NannyML CBPE reads XGBoost's 2019 drop
@@ -106,8 +108,8 @@ subgraph, p50 5.4ms / p95 13.0ms in-process (the database is measured in Phase 4
 | Monitoring job | **Running** -- `python -m fraud.monitoring.run`; rows + watermarks in Supabase (as of 2019-11-01) |
 | Containers | **Done** -- `Dockerfile.api` (1.9 GB), `Dockerfile.jobs`, `docker-compose.yml` (postgres + api + monitor) |
 | Load | **Measured** -- co-located p50 10.4 / p95 15.4 ms; ~180 req/s at 3 workers, shadow on |
-| CI/CD | **Built** -- `ci.yml` (lint+tests, 2 envs), `operate.yml` (monitor, promote, rollback, keep-alive); needs secrets |
-| Tests | **312 passing** in `.venv` across 21 files, **14** under `.venv-monitoring` |
+| CI/CD | **Live** -- `ci.yml` (lint+tests, 2 envs) green; `operate.yml` (weekly keep-alive, monthly monitor + auto-rollback, manual gate) with secrets set |
+| Tests | **317 passing** in `.venv` across 22 files, **14** under `.venv-monitoring` |
 
 Measured dataset facts now live in `docs/ARCHITECTURE.md` section 2.1. Read that before
 writing any feature code -- several of them contradict what the scaffolding assumed.
@@ -387,10 +389,16 @@ These were settled deliberately. Reopen only if new evidence appears.
   image uninstalls it and proves at build time that the booster still predicts.
 - **The jobs image needs `libgomp1`**: NannyML imports LightGBM, which links system OpenMP.
 - **Pushing workflow files needs the `workflow` token scope**: `gh auth refresh -s workflow`.
-- **In CI run `pytest`, not `python -m pytest`.** The module form puts the repo root on
-  `sys.path`, where NVIDIA's leftover `triton/` folder shadows the `triton` package that
-  torch_geometric probes for. Locally CUDA torch installs a real triton, which wins; on a
-  CPU-torch runner nothing does, and test collection fails in three files.
+- **On a CPU-torch runner, `python -m` imports NVIDIA's `triton/` folder as `triton`.**
+  The module form puts the repo root on `sys.path`, and that folder (no `__init__.py`)
+  becomes a namespace package. Locally CUDA torch installs a real triton, which outranks a
+  namespace package; on GitHub's runners nothing does and `import torch._dynamo` dies on
+  `triton.language`. It bit twice: test collection in `ci.yml` (fixed by calling the
+  `pytest` entry point) and the promotion gate in `operate.yml` (fixed by
+  `PYTHONSAFEPATH=1` for the whole workflow). Any new workflow step that imports torch
+  needs one of the two.
+- **`fraud.models.promote` exits 3 when the gate refuses, never 1.** 1 is what a traceback
+  exits with; `operate.yml` keeps a refused dry run green and still fails on a crash.
 - **Never run a sharded replay from a stdin script.** `spawn` workers re-import `__main__`
   from a file that does not exist and the pool hangs. Use the module entry points.
 - **`source .venv/bin/activate` does NOT change which `python` runs.** The shell profile

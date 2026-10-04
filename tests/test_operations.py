@@ -126,6 +126,18 @@ def test_gate_refuses_a_model_that_is_not_better_enough(monkeypatch, tmp_path):
     assert not report["passed"] and "below the required" in report["reason"]
 
 
+@pytest.mark.parametrize("passed, code", [(True, 0), (False, 3)])
+def test_a_refusal_exits_3_so_it_is_not_mistaken_for_a_crash(monkeypatch, tmp_path, passed, code):
+    # operate.yml lets a refused DRY RUN finish green but must still fail on a
+    # traceback, which exits 1 -- so a refusal must never exit 1.
+    import fraud.models.promote as P
+
+    monkeypatch.setattr(P, "repo_path", lambda p: tmp_path / p.split("/")[-1])
+    monkeypatch.setattr(P, "promote", lambda params, cand, apply: {"passed": passed})
+    assert P.main([]) == code
+    assert P.REFUSED == 3
+
+
 # --- guarded rollback --------------------------------------------------------------
 
 def test_rollback_if_alerting_does_nothing_for_a_healthy_champion(monkeypatch):

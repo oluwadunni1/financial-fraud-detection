@@ -115,11 +115,41 @@ jobs:
       - name: Data
         run: pipx run --spec "dvc[s3]" dvc pull $DATA
       - name: Promote or roll back
+        # Exit 3 means the gate ran and refused (fraud.models.promote.REFUSED).
+        # A refused DRY RUN is an answer, not a failure: the run stays green and
+        # the verdict goes to the run summary. A refused --apply stays red -- an
+        # alias move was asked for and did not happen. Anything else non-zero is
+        # a crash and fails either way.
         run: |
           flags=""
           [ "${{ inputs.action }}" = "rollback" ] && flags="--rollback"
           [ "${{ inputs.apply }}" = "true" ] && flags="$flags --apply"
-          .venv/bin/python -m fraud.models.promote $flags
+          rc=0
+          .venv/bin/python -m fraud.models.promote $flags || rc=$?
+          report=reports/${{ inputs.action == 'rollback' && 'rollback' || 'promotion' }}.json
+          if [ "$rc" -eq 0 ] || [ "$rc" -eq 3 ]; then
+          .venv/bin/python - "$report" "$rc" >> "$GITHUB_STEP_SUMMARY" <<'EOF'
+          import json, sys
+          report, rc = json.load(open(sys.argv[1])), int(sys.argv[2])
+          print(f"## Gate: {'PASSED' if rc == 0 else 'REFUSED'} ({'applied' if report.get('applied') else 'nothing moved'})")
+          if report.get("reason"):
+              print(f"\n**Reason:** {report['reason']}")
+          if report.get("skipped"):
+              print(f"\n**Skipped:** {report['skipped']}")
+          checks = report.get("checks", [])
+          if checks:
+              print("\n| check | result | detail |\n|---|---|---|")
+              for c in checks:
+                  detail = ", ".join(f"{k}={v:.4g}" if isinstance(v, float) else f"{k}={v}"
+                                     for k, v in c.items() if k not in ("check", "passed", "alias"))
+                  print(f"| {c['check']} | {'pass' if c['passed'] else '**fail**'} | {detail} |")
+          EOF
+          fi
+          if [ "$rc" -eq 3 ] && [ "${{ inputs.apply }}" != "true" ]; then
+            echo "::notice::gate refused -- dry run, nothing was asked to move"
+            exit 0
+          fi
+          exit "$rc"
       - uses: actions/upload-artifact@v4
         if: always()
         with:

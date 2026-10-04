@@ -222,6 +222,11 @@ def _audit(params: dict, kind: str, report: dict) -> None:
         mlflow.log_dict(report, f"{kind}.json")
 
 
+# Exit code for "the gate ran and said no". Distinct from 1, which is also what an
+# uncaught exception exits with, so a workflow can tell a refusal from a crash.
+REFUSED = 3
+
+
 def main(argv: list[str] | None = None) -> int:
     params = load_params()
     ap = argparse.ArgumentParser(description=__doc__)
@@ -237,7 +242,7 @@ def main(argv: list[str] | None = None) -> int:
     out = repo_path("reports/rollback.json" if args.rollback else "reports/promotion.json")
     out.write_text(json.dumps(report, indent=2, default=str))
     print(json.dumps(report, indent=2, default=str))
-    return 0 if report.get("passed", True) else 1
+    return 0 if report.get("passed", True) else REFUSED
 
 
 if __name__ == "__main__":

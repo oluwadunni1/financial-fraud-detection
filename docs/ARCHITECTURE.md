@@ -621,7 +621,8 @@ dominates both the wall clock and the memory.
 - [x] Heterogeneous GraphSAGE in PyG with `NeighborLoader`
 - [x] Trained on a T4: 20 epochs, 182s, **peak VRAM 154 MB**
 - [x] Compared against the champion on merit
-- [ ] Embeddings upserted to Supabase *(blocked -- see the serving problem below)*
+- [~] ~~Embeddings upserted to Supabase~~ **obsolete** -- serving scores the GNN end to end
+  on a per-request subgraph (decision 3 reversed), so there are no embeddings to store
 
 #### Result: relational structure wins, decisively
 
@@ -959,7 +960,9 @@ centre of the project. Deploy target deferred: Compose-only for now (a decision,
 - [x] Load test (`fraud.jobs.loadtest`) and co-located latency (HTTP replay vs Compose)
 - [x] GitHub Actions: `ci.yml` (lint + tests in both envs, no secrets) replaces NVIDIA's
       GPU-runner workflow; `operate.yml` (monthly monitor + auto-rollback, weekly Supabase
-      keep-alive, manual promote/rollback). Needs repo secrets to run.
+      keep-alive, manual promote/rollback). **Live 2026-10-04**: secrets set by
+      `scripts/set_github_secrets.sh`; keep-alive, gate and monitor each verified by a
+      dispatched run. A refused dry run exits 3 and stays green, verdict in the run summary.
 - [ ] Image build/push in CI; cloud deploy (deferred with the deploy target)
 
 **Measured against the Compose stack** (Postgres in the next container -- what Phase 4 projected):
