@@ -996,9 +996,11 @@ running Postgres, the load generator and the shadow model.
 > orchestration UI is wanted, **Prefect Cloud free tier** gives it with zero infra.
 
 ### Phase 7 — Demo & docs
-- [~] ~~Streamlit~~ **replaced by a shell demo** (`python -m fraud.demo status | results |
-  payload | explain | shadow | watch`): the demo is given from a terminal, and every view a
-  dashboard would show is one command against the live Compose stack.
+- [x] **Streamlit presentation app** (2026-10-05) -- `app/streamlit_app.py`: the answer,
+  a live replay, one transaction (score + shadow + both exact explanations), registry &
+  operations (real alias moves behind a confirm), monitoring, serving, the retrain. Reads
+  reports / API / registry only. The shell demo (`python -m fraud.demo ...`) stays as the
+  fallback.
 - [x] README with architecture diagram and honest limitations section
 - [x] Live swap demo: rollback -> fraud passes; gate promotion -> caught again (`demo watch`
   shows every worker on the new alias, ~3-35 s)

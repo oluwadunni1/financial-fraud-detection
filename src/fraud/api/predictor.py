@@ -28,7 +28,6 @@ from fraud.api.store import Neighbourhood
 from fraud.api.subgraph import build_request_graph
 from fraud.features.encoders import Encoder
 from fraud.features.velocity_online import velocity_for_transaction
-from fraud.models.gnn import TXN
 
 
 @dataclass
@@ -105,28 +104,36 @@ class Predictor:
         Same weights, no network. Used when the point is to measure the model
         rather than to exercise the registry.
         """
-        from torch_geometric.loader import NeighborLoader
+        import polars as pl
 
         from fraud.config import repo_path
-        from fraud.models.gnn import FraudGNN, load_graph
+        from fraud.features.velocity import velocity_columns
+        from fraud.models.gnn import FraudGNN
 
-        cfg = params["gnn"]
-        graph_dir = repo_path(params["paths"]["graph"])
-        train = load_graph(graph_dir / "train")
-        model = FraudGNN(train.metadata(), cfg)
-        with torch.no_grad():  # materialise the lazy layers before loading
-            batch = next(
-                iter(
-                    NeighborLoader(
-                        train,
-                        num_neighbors=cfg["num_neighbors"],
-                        input_nodes=TXN,
-                        batch_size=16,
-                        shuffle=False,
-                    )
-                )
-            )
-            model(batch.x_dict, batch.edge_index_dict)
+        # Lazy (-1, -1) layers need one forward pass to learn their widths. One
+        # request graph -- built by the serving builder itself -- is enough, and
+        # carries the same node/edge types as the training graph (the retrain
+        # asserts identical parameter names). It used to be a NeighborLoader batch
+        # from the 277k-node training graph: seconds of loading, and pyg-lib,
+        # which the API image does not ship -- so the dashboard image could not
+        # load the model it explains.
+        encoder = Encoder.from_json(repo_path(params["paths"]["encoder"]))
+        cards = json.loads(
+            (repo_path(params["paths"]["graph"]) / "card_mapping.json").read_text()
+        )
+        probe = {"txn_id": 0, "User": 0, "Card": 0, "ts": dt.datetime(2000, 1, 1),
+                 "Amount": 0.0, "Merchant": "0", "MCC": 0, "City": "", "State": "",
+                 "Zip": 0, "Errors": "", "Chip": "Swipe Transaction", "Time": 0,
+                 "Month": 1, "Day": 1}
+        empty = pl.DataFrame(schema={})
+        graph = build_request_graph(
+            probe, dict.fromkeys(velocity_columns(params["velocity"]["windows_hours"]), 0.0),
+            Neighbourhood(user_history=empty, merchant_history=empty), encoder,
+            cards["mapping"], cards["n_card_values"],
+        )
+        model = FraudGNN(graph.metadata(), params["gnn"])
+        with torch.no_grad():
+            model(graph.x_dict, graph.edge_index_dict)
         model.load_state_dict(
             torch.load(model_dir / "model.pt", map_location="cpu")
         )

@@ -1,0 +1,14 @@
+# The presentation app's look: the same ledger-blue accent as the project pages.
+[theme]
+primaryColor = "#0E6A8C"
+font = "sans serif"
+
+[server]
+headless = true
+# Behind Lightning's port proxy (and Compose's port mapping) the browser's origin
+# differs from the server's; Streamlit's CORS/XSRF checks would reject it.
+enableCORS = false
+enableXsrfProtection = false
+
+[browser]
+gatherUsageStats = false

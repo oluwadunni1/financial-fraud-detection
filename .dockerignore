@@ -7,6 +7,8 @@
 !src/
 !sql/
 !docker/
+!app/
+!.streamlit/
 !data/features/encoder.json
 !data/graph/card_mapping.json
 **/__pycache__

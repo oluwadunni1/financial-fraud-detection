@@ -66,9 +66,14 @@ notebook = [
     "nbclient>=0.10",
     "nbformat>=5",
 ]
+# The Streamlit presentation app (app/). Safe in .venv: purely additive, nothing
+# already installed moves (checked with `uv pip install --dry-run`).
 dashboard = [
     "streamlit>=1.38",
     "plotly>=5.24",
+    # The app calls the live API. The API image has no HTTP client of its own
+    # (it is the server), so without this the dashboard image could not start.
+    "httpx>=0.27",
 ]
 dev = [
     "pytest>=8.3",

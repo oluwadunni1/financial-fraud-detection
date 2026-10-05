@@ -3,6 +3,10 @@
 #
 #   ghcr.io/<owner>/fraud-api    Dockerfile.api    FastAPI + both scorers, CPU torch
 #   ghcr.io/<owner>/fraud-jobs   Dockerfile.jobs   the monitoring job (NannyML env)
+#   ghcr.io/<owner>/fraud-dashboard  Dockerfile.api --target dashboard  the Streamlit app
+#
+# Dockerfile.api has two final stages, so every build of it NAMES its target:
+# with none, Docker builds the last stage -- the dashboard, not the API.
 #
 # Each is tagged with the commit SHA (immutable: what exactly is running) and
 # `latest` (what `docker compose pull` fetches). The same idea as the model
@@ -47,6 +51,7 @@ jobs:
         include:
           - image: fraud-api
             dockerfile: Dockerfile.api
+            target: runtime
             # Imports the serving path end to end, without starting it (that needs
             # the registry and a database). Catches a missing dependency or file.
             smoke: >-
@@ -61,13 +66,20 @@ jobs:
               sh -c 'test -x /usr/local/bin/monitor-loop
               && python -c "import fraud.monitoring.run, nannyml"
               && echo jobs image ok'
+          - image: fraud-dashboard
+            dockerfile: Dockerfile.api
+            target: dashboard
+            smoke: >-
+              python -c "import streamlit, plotly, httpx, fraud.dashboard.pages, fraud.explain.graph;
+              from pathlib import Path; assert Path('app/streamlit_app.py').exists()
+              and Path('.streamlit/config.toml').exists(); print('dashboard image ok')"
     steps:
       - uses: actions/checkout@v4
         with:
           ref: ${{ env.SHA }}
 
       - name: Data the API image bakes in (encoder + card mapping, DVC-tracked)
-        if: matrix.image == 'fraud-api'
+        if: matrix.dockerfile == 'Dockerfile.api'
         env:
           AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
@@ -91,6 +103,7 @@ jobs:
         with:
           context: .
           file: ${{ matrix.dockerfile }}
+          target: ${{ matrix.target }}
           load: true
           tags: ${{ steps.name.outputs.ref }}:test
           cache-from: type=gha,scope=${{ matrix.image }}
@@ -104,6 +117,7 @@ jobs:
         with:
           context: .
           file: ${{ matrix.dockerfile }}
+          target: ${{ matrix.target }}
           push: true
           tags: |
             ${{ steps.name.outputs.ref }}:${{ env.SHA }}

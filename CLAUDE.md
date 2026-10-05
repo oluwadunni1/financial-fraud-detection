@@ -42,6 +42,17 @@ phases; section 10 is the Lightning AI setup.
 
 ## Current state (update as phases complete)
 
+**Streamlit presentation app (2026-10-05).** `app/streamlit_app.py`, seven pages in talk
+order; data in `fraud.dashboard.data` (reports, live API, registry, explain -- computes
+nothing), layout in `fraud.dashboard.pages`. The Operations page moves aliases for REAL
+behind a confirmation dialog -- verified in headless Chromium: rollback 57 s and a gate
+promotion 152 s to every worker swapped, champion restored to v3. Compose service
+`dashboard` on :8501 (`Dockerfile.api --target dashboard`), image built by CI.
+`Predictor.from_disk` now materialises the model from ONE serving request graph instead of
+a NeighborLoader batch of the 277k-node training graph: 0.2 s, no pyg-lib (absent from
+the API image, so the container could not explain), scores bit-equal (25 random 2019 rows
+vs the served replay: max diff 0.0).
+
 **Phase 7 done (2026-10-04).** The demo is a shell, not Streamlit: `python -m fraud.demo`
 (`status`, `results`, `payload`, `explain`, `shadow`, `watch`) over the Compose stack. The
 rehearsed story is txn 18267417 -- GraphSAGE 0.9928 alert, XGBoost 0.0244 pass -- through a
@@ -110,7 +121,7 @@ subgraph, p50 5.4ms / p95 13.0ms in-process (the database is measured in Phase 4
 | Containers | **Done** -- `Dockerfile.api` (1.9 GB), `Dockerfile.jobs`, `docker-compose.yml` (postgres + api + monitor); built by CI (`images.yml`) to `ghcr.io/oluwadunni1/fraud-{api,jobs}`, `docker compose pull` |
 | Load | **Measured** -- co-located p50 10.4 / p95 15.4 ms; ~180 req/s at 3 workers, shadow on |
 | CI/CD | **Live** -- `ci.yml` (lint+tests, 2 envs) green; `operate.yml` (weekly keep-alive, monthly monitor + auto-rollback, manual gate) with secrets set |
-| Tests | **332 passing** in `.venv` across 23 files, **14** under `.venv-monitoring` |
+| Tests | **346 passing** in `.venv` across 25 files, **14** under `.venv-monitoring` |
 
 Measured dataset facts now live in `docs/ARCHITECTURE.md` section 2.1. Read that before
 writing any feature code -- several of them contradict what the scaffolding assumed.
@@ -442,6 +453,17 @@ These were settled deliberately. Reopen only if new evidence appears.
   `pytest` entry point) and the promotion gate in `operate.yml` (fixed by
   `PYTHONSAFEPATH=1` for the whole workflow). Any new workflow step that imports torch
   needs one of the two.
+- **`Dockerfile.api` has two final stages; every build of it must name `target:`.** With
+  none, Docker builds the LAST stage -- the dashboard, not the API. `docker-compose.yml`
+  (`target: runtime`) and `images.yml` (per matrix entry) both name it.
+- **The dashboard's store is the Compose Postgres, never `.env`'s DATABASE_URL.** That is
+  Supabase, and the replay page resets the store. `fraud.dashboard.data.connect` sets
+  DATABASE_URL from `FRAUD_DB_URL` / `dashboard.db_url` first (load_dotenv never
+  overrides), and `prepare_replay` refuses any Supabase host.
+- **`AppTest` cannot keep an `st.dialog` open across reruns**, so the confirm-then-move flow
+  is verified in a real browser (playwright), not in `tests/test_dashboard.py`. A
+  Streamlit server also keeps stale bytecode for edited modules: restart it before
+  trusting a traceback whose line points at a comment.
 - **`fraud.models.promote` exits 3 when the gate refuses, never 1.** 1 is what a traceback
   exits with; `operate.yml` keeps a refused dry run green and still fails on a crash.
 - **Never run a sharded replay from a stdin script.** `spawn` workers re-import `__main__`

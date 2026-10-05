@@ -40,7 +40,7 @@ jobs:
       - name: Install
         run: |
           uv venv --python 3.12 .venv
-          uv pip install --python .venv/bin/python -e ".[dev,api,gnn,notebook]"
+          uv pip install --python .venv/bin/python -e ".[dev,api,gnn,notebook,dashboard]"
       - name: Lint
         run: .venv/bin/python -m ruff check src tests scripts
       - name: Tests

@@ -9,6 +9,7 @@
 #   api       FastAPI: @champion decides, @challenger scores in shadow; models
 #             come from the DagsHub registry by alias (credentials from .env)
 #   monitor   the monthly monitoring job (fraud.monitoring.run) on a loop
+#   dashboard the Streamlit presentation app on :8501 (app/streamlit_app.py)
 #
 # By default the API serves against the LOCAL Postgres -- the co-located setup
 # Phase 4 could only project. To serve against Supabase instead:
@@ -44,6 +45,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.api
+      target: runtime        # NOT the default: the file's last stage is the dashboard
     image: ghcr.io/oluwadunni1/fraud-api:${FRAUD_IMAGE_TAG:-latest}
     env_file: .env
     environment:
@@ -72,6 +74,28 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+    restart: unless-stopped
+
+  dashboard:                 # the presentation app -> http://localhost:8501
+    build:
+      context: .
+      dockerfile: Dockerfile.api
+      target: dashboard
+    image: ghcr.io/oluwadunni1/fraud-dashboard:${FRAUD_IMAGE_TAG:-latest}
+    env_file: .env           # MLflow credentials, for the registry page
+    environment:
+      FRAUD_API: http://api:8000
+      # The Compose Postgres, explicitly: .env's DATABASE_URL is Supabase, and
+      # the replay page resets the store (fraud.dashboard.data refuses Supabase).
+      FRAUD_DB_URL: postgresql://fraud:fraud@postgres:5432/fraud
+    volumes:                 # read-only: transactions, models and committed reports
+      - ./data:/app/data:ro
+      - ./reports:/app/reports:ro
+    ports:
+      - "8501:8501"
+    depends_on:
+      api:
+        condition: service_started
     restart: unless-stopped
 
   api-supabase:

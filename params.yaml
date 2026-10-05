@@ -376,6 +376,22 @@ neighbour_controls:
   top_n: 5000                 # "frauds caught in the top N alerts"
   output: reports/neighbour_controls.json
 
+# --- the Streamlit presentation (app/streamlit_app.py) --------------------------
+# Reads committed reports, the live API and the registry -- computes no result of
+# its own. Env overrides: FRAUD_API, FRAUD_DB_URL. The DB default is the COMPOSE
+# Postgres on purpose: .env's DATABASE_URL is Supabase, and the replay page
+# resets the store -- `fraud.dashboard.data` refuses to reset a Supabase host.
+dashboard:
+  api_url: http://localhost:8000
+  db_url: postgresql://fraud:fraud@localhost:5433/fraud
+  replay_start: "2019-02-22T17:00:00"   # the rehearsed demo evening: 377 rows, 2 frauds
+  replay_limit: 377
+  featured:                              # transactions offered on the scoring page
+    18267417: "Rome, $21.70 chip -- fraud GraphSAGE catches and XGBoost misses"
+    23750562: "$55.00 chip -- an ordinary legitimate purchase"
+    10429446: "$17.92 online -- legitimate, online (XGBoost's usual false-positive pattern)"
+  watch_seconds: 60                      # how long the ops page follows an alias swap
+
 # --- promotion and rollback (Phase 6) ------------------------------------------
 # `python -m fraud.models.promote` moves @champion only when the candidate's
 # registered weights reproduce its evaluated scores (decision 23) AND it beats

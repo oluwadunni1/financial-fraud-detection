@@ -87,8 +87,10 @@ uv venv --python 3.12
 uv pip install --python .venv/bin/python -e ".[dev,api,gnn,notebook]"
 .venv/bin/dvc pull                       # processed data, features, models, evidence
 
-# 2. The platform: Postgres + API + monitoring, from the CI-built images on ghcr.io
+# 2. The platform: Postgres + API + monitoring + the presentation app, from the
+#    CI-built images on ghcr.io
 docker compose pull && docker compose up -d    # or `up -d --build` to build locally
+# -> the app: http://localhost:8501   (the API: http://localhost:8000)
 curl -s localhost:8000/health | jq
 
 # 3. Score a real 2019 fraud that GraphSAGE catches and XGBoost misses
@@ -103,6 +105,17 @@ curl -s -X POST localhost:8000/predict -H 'content-type: application/json' -d @/
 .venv/bin/python -m fraud.demo results
 .venv/bin/python -m fraud.demo status
 ```
+
+### The presentation app
+
+`app/streamlit_app.py` walks the project in talk order — the answer, a live replay of
+a 2019 evening through the API, one transaction scored and explained by both models,
+the registry with **real promotion and rollback behind a confirmation**, monitoring,
+serving and the retrain. It computes nothing of its own: every number comes from
+the committed reports, the live API, the registry or the exact explain modules
+(`fraud.dashboard.data`). Run it outside Compose with
+`.venv/bin/streamlit run app/streamlit_app.py` (it talks to `localhost:8000` and the
+Compose Postgres on `localhost:5433`; `FRAUD_API` / `FRAUD_DB_URL` override).
 
 Monitoring runs in its own environment (NannyML conflicts with the main one — see
 `pyproject.toml`); `docker compose run --rm monitor python -m fraud.monitoring.run --as-of 2019-11-01`
@@ -152,6 +165,7 @@ error. The checks that caught them are now tests or gates:
 | `src/fraud/monitoring/` | delayed labels, NannyML CBPE + drift, `drift_metrics` sink, the monthly job |
 | `src/fraud/explain/` | exact TreeSHAP reason codes, GraphSAGE group Shapley |
 | `src/fraud/demo.py` | shell demo helpers: `status`, `results`, `payload`, `explain`, `shadow`, `watch` |
+| `app/`, `src/fraud/dashboard/` | the Streamlit presentation app: pages, and the data layer they read |
 | `notebooks/phase5/` | monitoring, explainability, staleness & operations experiments (executed) |
 | `sql/` | Postgres schema (Supabase and the Compose database run the same migrations) |
 | `docs/ARCHITECTURE.md` | the full design record, phase by phase |
