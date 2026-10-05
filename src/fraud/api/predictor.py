@@ -25,7 +25,7 @@ from typing import Any
 import torch
 
 from fraud.api.store import Neighbourhood
-from fraud.api.subgraph import build_request_graph
+from fraud.api.subgraph import build_request_graph, transaction_feature_names
 from fraud.features.encoders import Encoder
 from fraud.features.velocity_online import velocity_for_transaction
 
@@ -131,14 +131,22 @@ class Predictor:
             Neighbourhood(user_history=empty, merchant_history=empty), encoder,
             cards["mapping"], cards["n_card_values"],
         )
-        model = FraudGNN(graph.metadata(), params["gnn"])
+        info = json.loads((model_dir / "train_info.json").read_text())
+        # A retrained arm may have been trained blind to some feature columns;
+        # the mask travels inside the model (FraudGNN.txn_mask).
+        names = transaction_feature_names(encoder)
+        masked = [names.index(c) for c in info.get("masked_features", [])]
+        model = FraudGNN(graph.metadata(), {**params["gnn"], "txn_features": len(names)},
+                         masked_txn_features=masked)
         with torch.no_grad():
             model(graph.x_dict, graph.edge_index_dict)
         model.load_state_dict(
             torch.load(model_dir / "model.pt", map_location="cpu")
         )
-        info = json.loads((model_dir / "train_info.json").read_text())
-        return cls._assemble(model, params, f"gnn-local-epoch{info['best_epoch']}")
+        # The name is what the gate and the registry key on (decision 32): a
+        # retrained arm carries its own, v3 keeps its historical one.
+        return cls._assemble(model, params,
+                             info.get("model_name", f"gnn-local-epoch{info['best_epoch']}"))
 
     @classmethod
     def _assemble(

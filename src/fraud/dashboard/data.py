@@ -150,7 +150,19 @@ def retrain_summary(params: dict) -> dict[str, Any]:
         info = root / run / "train_info.json"
         if info.exists():
             curves[run] = [h["val_auc_pr"] for h in json.loads(info.read_text())["history"]]
-    return {"report": report, "graphs": graphs, "curves": curves}
+    # Step 3: the winner's served 2019 number, once its causal replay exists.
+    replay = repo_path("reports/metrics_replay_gnn_causal.json")
+    test = None
+    if replay.exists():
+        served = json.loads(replay.read_text())
+        test = {"model": served["model_version"], "auc_pr": served["metrics"]["auc_pr"],
+                "p100": served["metrics"]["precision_at_100"],
+                "v3_auc_pr": _report("reports/metrics_replay.json")["metrics"]["auc_pr"],
+                "gate": params["promotion"]["min_auc_pr_gain"]}
+        cmp = repo_path("reports/retrain_2019_comparison.json")
+        if cmp.exists():
+            test["bootstrap"] = json.loads(cmp.read_text())["paired_bootstrap"]
+    return {"report": report, "graphs": graphs, "curves": curves, "test_2019": test}
 
 
 # --- registry and the live API ---------------------------------------------------------

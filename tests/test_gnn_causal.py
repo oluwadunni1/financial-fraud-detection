@@ -96,3 +96,59 @@ def test_masked_short_velocity_is_zero_everywhere_else_untouched(parts):
     assert torch.equal(a[:, keep], b[:, keep])
     assert torch.any(a[:, masked] != 0)          # the mask had something to remove
     assert torch.all(plain.x[:, masked].abs().sum() > 0)   # and did not mutate the source
+
+
+# --- the feature mask lives inside the model ---------------------------------------
+
+def _tiny_graph():
+    from torch_geometric.data import HeteroData
+
+    g = HeteroData()
+    g["transaction"].x = torch.rand(3, 62)
+    g["user"].x = torch.rand(1, 13)
+    g["merchant"].x = torch.rand(1, 24)
+    one = torch.zeros(1, dtype=torch.long)
+    g["user", "transacts", "transaction"].edge_index = torch.stack([one, one])
+    g["merchant", "rev_at", "transaction"].edge_index = torch.stack([one, one])
+    g["transaction", "rev_transacts", "user"].edge_index = torch.tensor([[1], [0]])
+    g["transaction", "at", "merchant"].edge_index = torch.tensor([[2], [0]])
+    return g
+
+
+def test_the_mask_equals_zeroing_the_columns_and_survives_pickling(tmp_path):
+    from fraud.models.gnn import FraudGNN
+
+    torch.manual_seed(0)
+    g, masked = _tiny_graph(), [3, 7, 61]
+    plain = FraudGNN(g.metadata(), PARAMS["gnn"])
+    blind = FraudGNN(g.metadata(), PARAMS["gnn"], masked_txn_features=masked)
+    with torch.no_grad():
+        plain(g.x_dict, g.edge_index_dict), blind(g.x_dict, g.edge_index_dict)
+    # Non-persistent: trained weights (saved without a mask) load unchanged.
+    assert "txn_mask" not in blind.state_dict()
+    blind.load_state_dict(plain.state_dict())
+    plain.eval(), blind.eval()
+    zeroed = {**g.x_dict, "transaction": g.x_dict["transaction"].clone()}
+    zeroed["transaction"][:, masked] = 0
+    with torch.no_grad():
+        assert torch.equal(blind(g.x_dict, g.edge_index_dict),
+                           plain(zeroed, g.edge_index_dict))
+        # mlflow.pytorch pickles the whole module: the mask must come back with it.
+        torch.save(blind, tmp_path / "m.pt")
+        again = torch.load(tmp_path / "m.pt", weights_only=False)
+        assert torch.equal(again(g.x_dict, g.edge_index_dict), blind(g.x_dict, g.edge_index_dict))
+    assert plain.txn_mask is None
+
+
+def test_v3_loads_without_a_mask_and_the_winner_with_its_five():
+    from fraud.api.predictor import Predictor
+
+    v3_dir = repo_path(PARAMS["paths"]["models"]) / "gnn"
+    win_dir = repo_path(PARAMS["gnn_causal"]["models_dir"]) / "no_short_velocity-pw3"
+    if not (v3_dir / "model.pt").exists() or not (win_dir / "model.pt").exists():
+        pytest.skip("needs both GraphSAGE models (dvc pull)")
+    v3 = Predictor.from_disk(PARAMS, v3_dir)
+    win = Predictor.from_disk(PARAMS, win_dir)
+    assert v3.model.txn_mask is None and v3.model_version == "gnn-local-epoch19"
+    assert int((win.model.txn_mask == 0).sum()) == 5
+    assert win.model_version.startswith("gnn-causal-no_short_velocity")

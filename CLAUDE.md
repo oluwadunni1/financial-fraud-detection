@@ -121,7 +121,7 @@ subgraph, p50 5.4ms / p95 13.0ms in-process (the database is measured in Phase 4
 | Containers | **Done** -- `Dockerfile.api` (1.9 GB), `Dockerfile.jobs`, `docker-compose.yml` (postgres + api + monitor); built by CI (`images.yml`) to `ghcr.io/oluwadunni1/fraud-{api,jobs}`, `docker compose pull` |
 | Load | **Measured** -- co-located p50 10.4 / p95 15.4 ms; ~180 req/s at 3 workers, shadow on |
 | CI/CD | **Live** -- `ci.yml` (lint+tests, 2 envs) green; `operate.yml` (weekly keep-alive, monthly monitor + auto-rollback, manual gate) with secrets set |
-| Tests | **346 passing** in `.venv` across 25 files, **14** under `.venv-monitoring` |
+| Tests | **348 passing** in `.venv` across 25 files, **14** under `.venv-monitoring` |
 
 Measured dataset facts now live in `docs/ARCHITECTURE.md` section 2.1. Read that before
 writing any feature code -- several of them contradict what the scaffolding assumed.
@@ -307,6 +307,17 @@ These were settled deliberately. Reopen only if new evidence appears.
    2018 flatters every arm equally; 2019 decides. The stored `metrics_replay_2018.npz`
    predates the same-minute fix (2.54% of rows differ; serving agrees with the examples) --
    regenerate it before it serves as a monitoring reference again.
+35. **The retrain's 2018 lead did not survive 2019: +0.037 became +0.006, so it was NOT
+   registered.** The winner (no short-window velocity, epoch 18) replayed causally on all of
+   2019: AUC-PR 0.4725 vs v3 0.4665, Δ +0.0060 [−0.0156, +0.0296], worse in 31% of paired
+   resamples (`reports/retrain_2019_comparison.json`); top-1000 frauds 688 vs 649, top-5000
+   1,472 vs 1,544; graph-off 0.0907 (v3 0.0418). Below the gate's +0.02, so
+   `registry_gnn_causal` was not run and @challenger stays XGBoost v4. Cause: best-epoch
+   selection on a curve swinging ±0.1 epoch to epoch flattered 2018 (epoch 17 was 0.40).
+   The next attempt must select robustly -- LR decay, more epochs, weight averaging or a
+   plateau -- not a single spike. The serving path for a retrained arm is proven: the
+   feature mask lives IN the model (`FraudGNN.txn_mask`, non-persistent buffer, survives
+   MLflow's pickle) and served scores equal the training view to 1.2e-7.
 29. **Promotion goes through `fraud.models.promote`, never a hand-set alias.** The gate
    re-scores 2019 transactions THROUGH the registry for both candidate and champion (each
    must reproduce its evaluated scores), requires the family's evidence, and demands

@@ -552,8 +552,28 @@ selects on **all of 2018** ({rep['val_examples']:,} transactions), where v3 scor
         fig.update_xaxes(title="epoch")
         fig.update_yaxes(title="2018 AUC-PR")
         st.plotly_chart(_layout(fig, 300), width="stretch")
-    st.warning(f"**{rep['winner']}** leads by +{rep['winner_gain_vs_v3_val']:.3f} on 2018 by "
-               "dropping the drifted short-window velocity features. It has **not** been "
-               "tested on 2019, registered, or promoted: 2019 decides, through the gate.")
+    t = r.get("test_2019")
+    if not t:
+        st.warning(f"**{rep['winner']}** leads by +{rep['winner_gain_vs_v3_val']:.3f} on 2018 by "
+                   "dropping the drifted short-window velocity features. It has **not** been "
+                   "tested on 2019, registered, or promoted: 2019 decides, through the gate.")
+        return
+    gain = t["auc_pr"] - t["v3_auc_pr"]
+    st.subheader("2019, served — the test that decides")
+    c = st.columns(3)
+    c[0].metric("v3 (champion)", f"{t['v3_auc_pr']:.4f}")
+    c[1].metric("Retrained winner", f"{t['auc_pr']:.4f}", f"{gain:+.4f}", delta_color="off",
+                delta_arrow="off")
+    c[2].metric("Gate needs", f"≥ {t['v3_auc_pr'] + t['gate']:.4f}", f"+{t['gate']} gain",
+                delta_color="off", delta_arrow="off")
+    (st.success if gain >= t["gate"] else st.info)(
+        f"The 2018 lead of +{rep['winner_gain_vs_v3_val']:.3f} became {gain:+.4f} on 2019"
+        + (f" (95% CI {t['bootstrap']['ci_low']:+.3f} to {t['bootstrap']['ci_high']:+.3f})"
+           if t.get("bootstrap") else "")
+        + ": a tie, not a win. It was not registered — the gate "
+        "would refuse it, by design. Picking the best epoch of a noisy 2018 curve "
+        "flattered 2018; a steadier training run is the next attempt."
+        if gain < t["gate"] else
+        f"+{gain:.4f} on 2019 clears the gate's +{t['gate']}: ready for the promotion gate.")
 
 

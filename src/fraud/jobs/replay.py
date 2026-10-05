@@ -36,6 +36,7 @@ import argparse
 import collections
 import datetime as dt
 import json
+import pathlib
 import sys
 import time
 from collections.abc import Sequence
@@ -786,6 +787,9 @@ def main(argv: list[str] | None = None) -> int:
         help="control: score with another (activity-matched) entity's real history",
     )
     controls = params["neighbour_controls"]
+    ap.add_argument("--model-dir", default=None,
+                    help="a GraphSAGE model directory (default: paths.models/gnn, v3); "
+                         "e.g. data/models/gnn_causal/no_short_velocity-pw3")
     ap.add_argument("--shuffle-seed", type=int, default=controls["shuffle_seed"])
     ap.add_argument("--shuffle-block", type=int, default=controls["shuffle_block"],
                     help="entities per activity block a donor is drawn from")
@@ -831,7 +835,7 @@ def main(argv: list[str] | None = None) -> int:
         f"({int(rows['Fraud'].sum()):,} frauds), chronologically"
     )
 
-    model_dir = repo_path(params["paths"]["models"]) / "gnn"
+    model_dir = repo_path(args.model_dir or (pathlib.Path(params["paths"]["models"]) / "gnn"))
     predictor = Predictor.from_disk(params, model_dir)
     print(f"model: {predictor.model_version}")
     if args.shuffle_neighbours and args.no_neighbours:

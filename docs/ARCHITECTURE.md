@@ -1018,8 +1018,12 @@ running Postgres, the load generator and the shadow model.
 - [x] **Step 2, `train_gnn_causal`** -- val = all of 2018 (a 5% sample had sd 0.031).
       v3 0.5267 | full pw1 0.4948, pw3 0.5006, pw10 0.3629 | no cardholder history 0.4928 |
       **no short-window velocity 0.5638 (+0.037)**. CPU, ~100 s/epoch, 2.6 h for five runs.
-- [ ] Step 3, the winner's 2019 causal replay + graph-off ablation; register v5
-- [ ] Step 4, the gate (>= 0.4865) and, if it passes, the live swap + monitoring reference
+- [x] **Step 3, the winner on 2019** -- served 0.4725 vs v3 0.4665, Δ +0.006
+      [−0.016, +0.030]; graph-off 0.0907. Below the gate's 0.4865: **not registered**
+      (decision 35). Mask inside the model; `replay --model-dir`; `registry_gnn_causal`
+      ready for a candidate that clears the bar.
+- [ ] Step 4, the gate -- not reached. Next attempt: a steadier training run (LR decay,
+      more epochs, robust epoch selection), then the same 2019 replay.
 
 ### Phase 8 — Stretch
 - [ ] Neo4j/Memgraph purely as a visual graph explorer (presentation asset, not compute)

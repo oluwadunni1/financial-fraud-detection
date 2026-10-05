@@ -112,8 +112,19 @@ class SAGE(nn.Module):
 class FraudGNN(nn.Module):
     """Hetero encoder + a binary head on transaction nodes."""
 
-    def __init__(self, metadata, cfg: dict):
+    def __init__(self, metadata, cfg: dict, masked_txn_features: list[int] | None = None):
         super().__init__()
+        # Columns of the transaction-node features the model must never see
+        # (the retrain drops the drifted short-window velocity, decision 34).
+        # Held INSIDE the model so every caller -- the API, the replay, the
+        # explanations, the copy MLflow pickles -- applies it without being told.
+        # Non-persistent: not in state_dict, so trained weights load unchanged.
+        if masked_txn_features:
+            self.register_buffer("txn_mask", torch.ones(cfg.get("txn_features", 62)),
+                                 persistent=False)
+            self.txn_mask[masked_txn_features] = 0.0
+        else:
+            self.txn_mask = None
         self.encoder = to_hetero(
             SAGE(
                 cfg["hidden_channels"],
@@ -130,6 +141,8 @@ class FraudGNN(nn.Module):
         return self.encoder(x_dict, edge_index_dict)
 
     def forward(self, x_dict, edge_index_dict) -> torch.Tensor:
+        if self.txn_mask is not None:
+            x_dict = {**x_dict, TXN: x_dict[TXN] * self.txn_mask}
         return self.head(self.embed(x_dict, edge_index_dict)[TXN]).squeeze(-1)
 
 

@@ -1,0 +1,29 @@
+{
+  "champion": "gnn-local-epoch19",
+  "candidate": "gnn-causal-no_short_velocity-pw3-epoch18",
+  "v3_auc_pr": 0.4664956962718998,
+  "candidate_auc_pr": 0.47252887957066386,
+  "paired_bootstrap": {
+    "delta": 0.0060331832987640666,
+    "ci_low": -0.015598223349897784,
+    "ci_high": 0.029598801138102246,
+    "p_worse": 0.30666666666666664
+  },
+  "frauds_in_top_k": {
+    "100": {
+      "v3": 71,
+      "retrained": 71
+    },
+    "1000": {
+      "v3": 649,
+      "retrained": 688
+    },
+    "5000": {
+      "v3": 1544,
+      "retrained": 1472
+    }
+  },
+  "gate_min_gain": 0.02,
+  "registered": false,
+  "reason": "gain below promotion.min_auc_pr_gain; not registered"
+}
