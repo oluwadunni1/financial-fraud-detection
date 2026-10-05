@@ -28,8 +28,8 @@ the neighbourhood at scoring time and GraphSAGE falls from 0.4665 to 0.0418. A s
 control rules out the obvious objection (an empty neighbourhood is simply unfamiliar): give
 each merchant another, equally busy merchant's real history and it falls just as far, to
 0.0379. The signal is *this merchant's* recent activity. The card's own history, by
-contrast, is not helping -- borrowing another card's scores 0.5046 (+0.038 [+0.020, +0.053]),
-an open finding for the retrain. The sequential
+contrast, is not helping -- borrowing another card's scores 0.5046 (+0.038 [+0.020, +0.053]);
+see *The retrain* below. The sequential
 foundation model adds +23% over a same-rows tabular base, but stays below XGBoost trained on
 all history and at half of GraphSAGE.
 
@@ -90,6 +90,7 @@ uv pip install --python .venv/bin/python -e ".[dev,api,gnn,notebook]"
 # 2. The platform: Postgres + API + monitoring + the presentation app, from the
 #    CI-built images on ghcr.io
 docker compose pull && docker compose up -d    # or `up -d --build` to build locally
+# pin the release instead of latest:  FRAUD_IMAGE_TAG=v1.0 docker compose up -d
 # -> the app: http://localhost:8501   (the API: http://localhost:8000)
 curl -s localhost:8000/health | jq
 
@@ -138,6 +139,28 @@ error. The checks that caught them are now tests or gates:
 - **Ablations over attribution.** Group Shapley suggested the graph contributed ~15%; the
   graph-off ablation showed the model collapses without it. The ablation is what decides.
 
+## The retrain: matched, not beaten
+
+v3's training graph was not the graph serving builds: its neighbours came from the
+under-sampled rows (~9% fraud, against 0.12% in reality), were sampled across 1991–2017
+including *later* transactions, and its "card" node held one card where serving reads the
+whole cardholder. The retrain builds every training example **with the serving code
+itself** (`causal_graph` stage; skew-tested against `build_request_graph` to 1e-6), selects
+on **all of 2018** (a 5% sample's estimate had sd 0.031, as large as the gate's margin), and
+tests the 2018 winner once on 2019:
+
+| | v3 (champion) | retrained: no short-window velocity |
+|---|---|---|
+| 2018 AUC-PR (selection) | 0.5267 | 0.5638 (+0.037) |
+| **2019 AUC-PR (served, causal replay)** | **0.4665** | **0.4725 (+0.006, 95% CI −0.016 to +0.030)** |
+| 2019 without its neighbourhood | 0.0418 | 0.0907 |
+
+A tie. The gate demands +0.02, so the retrain was **not registered** and v3 stays champion:
+the 2018 lead came from picking the best epoch of a curve that swung ±0.1 between epochs.
+What it did establish: a retrained arm serves exactly as trained (its feature mask lives in
+the model; served scores equal the training view to 1.2e-7), and dropping the drifted
+1-hour velocity features costs nothing. Next attempt: a steadier run selected robustly.
+
 ## Honest limitations
 
 - **Synthetic data, ~2,000 users.** TabFormer is generated; drift is the generator's, and a
@@ -148,9 +171,12 @@ error. The checks that caught them are now tests or gates:
 - **Served GraphSAGE is 17% below offline** because serving takes the 10 most recent
   neighbours, not a sample across the card's history — a recorded latency trade-off.
 - **Short-window velocity has drifted** since training (a 1 h ingest lag *raises* 2019
-  AUC-PR by +0.07, almost all through velocity). The fix is a retrain, not a lag.
-- **The card's own history lowers 2019 AUC-PR** (shuffled control: +0.038 without it), for
-  reasons not yet established -- it is not fraud bursts. Candidate for the retrain.
+  AUC-PR by +0.07, almost all through velocity). A retrain without those features ties v3
+  on 2019 rather than beating it — the fix is a better-selected retrain, not a lag.
+- **The card's own history lowers v3's 2019 AUC-PR** (shuffled control: +0.038 without it).
+  Not fraud bursts (tested); the likely cause is v3's card-not-cardholder training node,
+  which the retrain removes. Removing cardholder history from a model trained on the
+  served neighbourhood does *not* help (2018: 0.4928 vs 0.5006).
 - **Compose, not cloud.** Deployment target deferred; latency is measured co-located.
 
 ## Repository map
@@ -166,6 +192,7 @@ error. The checks that caught them are now tests or gates:
 | `src/fraud/explain/` | exact TreeSHAP reason codes, GraphSAGE group Shapley |
 | `src/fraud/demo.py` | shell demo helpers: `status`, `results`, `payload`, `explain`, `shadow`, `watch` |
 | `app/`, `src/fraud/dashboard/` | the Streamlit presentation app: pages, and the data layer they read |
+| `src/fraud/features/causal_graph.py`, `src/fraud/models/gnn_causal.py` | the retrain: training examples built by the serving code, and the arms |
 | `notebooks/phase5/` | monitoring, explainability, staleness & operations experiments (executed) |
 | `sql/` | Postgres schema (Supabase and the Compose database run the same migrations) |
 | `docs/ARCHITECTURE.md` | the full design record, phase by phase |

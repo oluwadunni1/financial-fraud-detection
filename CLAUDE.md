@@ -475,6 +475,11 @@ These were settled deliberately. Reopen only if new evidence appears.
   is verified in a real browser (playwright), not in `tests/test_dashboard.py`. A
   Streamlit server also keeps stale bytecode for edited modules: restart it before
   trusting a traceback whose line points at a comment.
+- **A release tag re-tags images, it never rebuilds them.** `release.yml` points
+  `ghcr.io/.../fraud-{api,jobs,dashboard}:vX` at the images `images.yml` built for that
+  commit, so tag only a commit whose images build finished -- otherwise it fails on the
+  missing source tag. Runners are pinned to `ubuntu-24.04` (not `-latest`, which moved to
+  Ubuntu 26 on 2026-10-19) and the actions to Node-24 majors.
 - **`fraud.models.promote` exits 3 when the gate refuses, never 1.** 1 is what a traceback
   exits with; `operate.yml` keeps a refused dry run green and still fails on a crash.
 - **Never run a sharded replay from a stdin script.** `spawn` workers re-import `__main__`

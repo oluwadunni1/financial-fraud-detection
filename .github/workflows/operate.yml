@@ -64,7 +64,7 @@ env:
 jobs:
   keepalive:
     if: github.event.schedule == '0 7 * * 1' || inputs.action == 'keepalive'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - run: pip install "psycopg[binary]"
       - name: select 1
@@ -72,11 +72,11 @@ jobs:
 
   monitor:
     if: github.event.schedule == '0 6 2 * *' || inputs.action == 'monitor'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 60
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v6
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10
         with: { python-version: "3.12", enable-cache: true }
       - name: Monitoring env (decision 24)
         run: |
@@ -97,16 +97,16 @@ jobs:
           uv pip install --python .venv/bin/python -e ".[api]"
       - name: Roll back if the champion is persistently alerting
         run: .venv/bin/python -m fraud.models.promote --rollback --if-alerting --apply
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with: { name: rollback-report, path: reports/rollback.json, if-no-files-found: ignore }
 
   gate:
     if: inputs.action == 'promote' || inputs.action == 'rollback'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 60
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v6
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10
         with: { python-version: "3.12", enable-cache: true }
       - name: Main env
         run: |
@@ -150,7 +150,7 @@ jobs:
             exit 0
           fi
           exit "$rc"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: always()
         with:
           name: ${{ inputs.action }}-report

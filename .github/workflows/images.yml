@@ -43,7 +43,7 @@ jobs:
   build:
     name: build ${{ matrix.image }}
     if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 45
     strategy:
       fail-fast: false
@@ -74,7 +74,7 @@ jobs:
               from pathlib import Path; assert Path('app/streamlit_app.py').exists()
               and Path('.streamlit/config.toml').exists(); print('dashboard image ok')"
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           ref: ${{ env.SHA }}
 
@@ -90,16 +90,16 @@ jobs:
         # GHCR needs a lowercase path; repository_owner keeps its case.
         run: echo "ref=${REGISTRY}/${GITHUB_REPOSITORY_OWNER,,}/${{ matrix.image }}" >> "$GITHUB_OUTPUT"
 
-      - uses: docker/setup-buildx-action@v3
+      - uses: docker/setup-buildx-action@v4
 
-      - uses: docker/login-action@v3
+      - uses: docker/login-action@v4
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Build (loaded locally for the smoke test)
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: .
           file: ${{ matrix.dockerfile }}
@@ -113,7 +113,7 @@ jobs:
         run: docker run --rm ${{ steps.name.outputs.ref }}:test ${{ matrix.smoke }}
 
       - name: Push (rebuild is a cache hit)
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: .
           file: ${{ matrix.dockerfile }}
