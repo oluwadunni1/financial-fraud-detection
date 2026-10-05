@@ -479,7 +479,10 @@ These were settled deliberately. Reopen only if new evidence appears.
   `ghcr.io/.../fraud-{api,jobs,dashboard}:vX` at the images `images.yml` built for that
   commit, so tag only a commit whose images build finished -- otherwise it fails on the
   missing source tag. Runners are pinned to `ubuntu-24.04` (not `-latest`, which moved to
-  Ubuntu 26 on 2026-10-19) and the actions to Node-24 majors.
+  Ubuntu 26 on 2026-10-19) and the actions to Node-24 majors. `astral-sh/setup-uv`
+  publishes IMMUTABLE releases (from v8): there is no floating `v10` tag, so it is pinned
+  exactly (`@v10.2.0`) -- `@v10` failed every job at "Set up job". Check a new action
+  ref with `git ls-remote --tags https://github.com/<repo> refs/tags/<ref>` first.
 - **`fraud.models.promote` exits 3 when the gate refuses, never 1.** 1 is what a traceback
   exits with; `operate.yml` keeps a refused dry run green and still fails on a crash.
 - **Never run a sharded replay from a stdin script.** `spawn` workers re-import `__main__`
