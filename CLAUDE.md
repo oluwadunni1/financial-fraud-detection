@@ -483,6 +483,16 @@ These were settled deliberately. Reopen only if new evidence appears.
   publishes IMMUTABLE releases (from v8): there is no floating `v10` tag, so it is pinned
   exactly (`@v10.2.0`) -- `@v10` failed every job at "Set up job". Check a new action
   ref with `git ls-remote --tags https://github.com/<repo> refs/tags/<ref>` first.
+- **This Studio's DVC cache uses hard links (`.dvc/config.local`: `cache.type
+  hardlink,copy`).** A workspace file and its cache object are the SAME file, so never edit
+  a tracked file in place -- `dvc unprotect <path>` first; stages that rewrite outputs
+  (rmtree / new file) are safe. Set 2026-10-06 with the Studio cleanup: 40 GB -> 5.6 GB.
+  The FM embeddings (`fm_embeddings*`, ~7.4 GB each, never pushed -- decision 21) were
+  deleted locally; `dvc repro fm_embeddings fm_embeddings_isolated` (GPU) regenerates them
+  before `fm_head` can rerun. Do not `dvc gc --workspace` while any checkout is failing: it
+  deleted cache objects the workspace still used (rebuilt with `dvc commit`; nothing lost,
+  R2 had everything). `evaluate` shows stale only because `metrics.py` gained an optional
+  `sample_weight` -- rerunning it reproduces the same numbers.
 - **`fraud.models.promote` exits 3 when the gate refuses, never 1.** 1 is what a traceback
   exits with; `operate.yml` keeps a refused dry run green and still fails on a crash.
 - **Never run a sharded replay from a stdin script.** `spawn` workers re-import `__main__`
