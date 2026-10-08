@@ -187,13 +187,20 @@ def check_supabase(apply_sql: bool) -> None:
                 conn.rollback()
                 fail(f"vector round-trip failed: {type(e).__name__}: {e}")
 
+        # Prove the retention function works WITHOUT pruning anything: run it in its
+        # own transaction and roll back. It deletes rows older than `retain` before
+        # NOW, so with 2019 data a committed call empties the hot store -- this
+        # check once deleted all 37,031 seeded rows on Supabase (CLAUDE.md gotcha).
+        conn.commit()           # close the transaction the checks above used
         try:
             cur.execute("select prune_transaction_events('30 days'::interval)")
-            conn.commit()
-            ok(f"prune_transaction_events() callable (removed {cur.fetchone()[0]} rows)")
+            would_remove = cur.fetchone()[0]
+            ok(f"prune_transaction_events() callable "
+               f"(would remove {would_remove} rows; rolled back, nothing deleted)")
         except Exception as e:
-            conn.rollback()
             fail(f"prune_transaction_events() not callable: {type(e).__name__}: {e}")
+        finally:
+            conn.rollback()
 
 
 def main() -> int:

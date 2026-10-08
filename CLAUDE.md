@@ -121,7 +121,7 @@ subgraph, p50 5.4ms / p95 13.0ms in-process (the database is measured in Phase 4
 | Containers | **Done** -- `Dockerfile.api` (1.9 GB), `Dockerfile.jobs`, `docker-compose.yml` (postgres + api + monitor); built by CI (`images.yml`) to `ghcr.io/oluwadunni1/fraud-{api,jobs}`, `docker compose pull` |
 | Load | **Measured** -- co-located p50 10.4 / p95 15.4 ms; ~180 req/s at 3 workers, shadow on |
 | CI/CD | **Live** -- `ci.yml` (lint+tests, 2 envs) green; `operate.yml` (weekly keep-alive, monthly monitor + auto-rollback, manual gate) with secrets set |
-| Tests | **359 passing** in `.venv` across 26 files, **14** under `.venv-monitoring` |
+| Tests | **360 passing** in `.venv` across 27 files, **14** under `.venv-monitoring` |
 
 Measured dataset facts now live in `docs/ARCHITECTURE.md` section 2.1. Read that before
 writing any feature code -- several of them contradict what the scaffolding assumed.
@@ -479,11 +479,13 @@ These were settled deliberately. Reopen only if new evidence appears.
   .env without overriding and reads lazily), and `prepare_replay` refuses any Supabase
   host. That re-pointing persists for the PROCESS: `tests/test_dashboard.py` restores
   DATABASE_URL after each test, or later DB tests silently target Compose and skip.
-- **`scripts/verify_services.py` COMMITS `prune_transaction_events('30 days')` on
-  Supabase.** The check reads "callable", but it deletes every `transaction_events` row
-  older than 30 days before NOW -- with 2019 data, all of them (37,031 rows on 2026-10-08;
-  reseed with `replay --http --reset-store`). Harmless in Phase 0, when the table held
-  smoke rows only.
+- **Never commit `prune_transaction_events()` against a store holding replay data.** It
+  deletes `transaction_events` rows older than `retain` before NOW -- with 2019 data, every
+  row. `scripts/verify_services.py` once committed it as a "callable?" check and emptied
+  the Supabase hot store (37,031 rows on 2026-10-08; reseed with `replay --http
+  --reset-store`). The check now runs it in its own transaction and ROLLS BACK, reporting
+  "would remove N rows" -- `tests/test_verify_services.py` fails if it is ever committed
+  again, and a live run on seeded Compose rows left all 18 in place.
 - **`AppTest` cannot keep an `st.dialog` open across reruns**, so the confirm-then-move flow
   is verified in a real browser (playwright), not in `tests/test_dashboard.py`. A
   Streamlit server also keeps stale bytecode for edited modules: restart it before
