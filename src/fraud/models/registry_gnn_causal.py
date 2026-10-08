@@ -18,14 +18,13 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import sys
 
 import mlflow
 import torch
-from dotenv import load_dotenv
 
-from fraud.config import REPO_ROOT, load_params, repo_path
+from fraud import settings
+from fraud.config import load_params, repo_path
 
 ALIAS = "challenger"
 
@@ -33,7 +32,6 @@ ALIAS = "challenger"
 def register(params: dict, run: str, replay: str, ablation: str) -> dict:
     from fraud.api.predictor import Predictor
 
-    load_dotenv(REPO_ROOT / ".env")
     model_dir = repo_path(params["gnn_causal"]["models_dir"]) / run
     info = json.loads((model_dir / "train_info.json").read_text())
     served = json.loads(repo_path(replay).read_text())
@@ -46,7 +44,7 @@ def register(params: dict, run: str, replay: str, ablation: str) -> dict:
         raise RuntimeError(f"add promotion.evaluated[{name!r}] first: the gate needs it")
 
     model = Predictor.from_disk(params, model_dir).model.eval()
-    mlflow.set_tracking_uri(os.environ["MLFLOW_TRACKING_URI"])
+    settings.configure_mlflow()
     mlflow.set_experiment(params["mlflow"]["experiment_name"])
     registered = params["mlflow"]["registered_model_name"]
     with mlflow.start_run(run_name=f"graphsage-causal-{info['arm']}") as r:

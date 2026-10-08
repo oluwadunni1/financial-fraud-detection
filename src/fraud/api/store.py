@@ -14,7 +14,6 @@ replay causally honest rather than merely well-intentioned.
 from __future__ import annotations
 
 import datetime as dt
-import os
 from dataclasses import dataclass
 from typing import Any
 
@@ -22,7 +21,7 @@ import polars as pl
 import psycopg
 from psycopg.rows import dict_row
 
-from fraud.config import REPO_ROOT
+from fraud import settings
 from fraud.features.velocity import velocity_columns
 
 # What velocity needs back from the store, named as compute_velocity expects.
@@ -74,13 +73,9 @@ class Neighbourhood:
 
 
 def connection_string() -> str:
-    from dotenv import load_dotenv
-
-    load_dotenv(REPO_ROOT / ".env")
-    url = os.getenv("DATABASE_URL", "")
-    if not url or "<" in url:
-        raise RuntimeError("DATABASE_URL missing or placeholder in .env")
-    return url
+    # Read at call time, never cached: the dashboard re-points DATABASE_URL at
+    # the Compose Postgres just before connecting (fraud.settings docstring).
+    return settings.database_url()
 
 
 def connect() -> psycopg.Connection:

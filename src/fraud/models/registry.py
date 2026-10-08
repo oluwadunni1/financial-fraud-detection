@@ -16,15 +16,14 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import pathlib
 import sys
 
 import mlflow
 import xgboost as xgb
-from dotenv import load_dotenv
 
-from fraud.config import REPO_ROOT, load_params, repo_path
+from fraud import settings
+from fraud.config import load_params, repo_path
 
 ALIAS = "champion"
 
@@ -46,22 +45,16 @@ def register(
     report_path: pathlib.Path,
     params: dict,
 ) -> dict:
-    load_dotenv(REPO_ROOT / ".env")
-    for required in ("MLFLOW_TRACKING_URI", "MLFLOW_TRACKING_USERNAME",
-                     "MLFLOW_TRACKING_PASSWORD"):
-        if not os.getenv(required) or "<" in os.getenv(required, ""):
-            raise RuntimeError(
-                f"{required} is missing or a placeholder in .env. "
-                "This stage needs DagsHub credentials; the rest of the pipeline "
-                "does not (run `dvc repro evaluate` to skip it)."
-            )
+    hint = ("This stage needs DagsHub credentials; the rest of the pipeline "
+            "does not (run `dvc repro evaluate` to skip it).")
+    settings.require_all(*settings.MLFLOW_VARS, hint=hint)
 
     info = json.loads((model_dir / "train_info.json").read_text())
     report = json.loads(report_path.read_text())
     booster = xgb.Booster()
     booster.load_model(model_dir / "model.json")
 
-    mlflow.set_tracking_uri(os.environ["MLFLOW_TRACKING_URI"])
+    settings.configure_mlflow(hint=hint)
     mlflow.set_experiment(params["mlflow"]["experiment_name"])
     name = params["mlflow"]["registered_model_name"]
 

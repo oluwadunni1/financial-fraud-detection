@@ -18,14 +18,13 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import pathlib
 import sys
 
 import mlflow
-from dotenv import load_dotenv
 
-from fraud.config import REPO_ROOT, load_params, repo_path
+from fraud import settings
+from fraud.config import load_params, repo_path
 from fraud.models.registry_gnn import _flatten
 
 VERDICT = (
@@ -38,15 +37,11 @@ VERDICT = (
 
 def log(metrics_path: pathlib.Path, head_dir: pathlib.Path,
         reports: list[pathlib.Path], params: dict) -> dict:
-    load_dotenv(REPO_ROOT / ".env")
-    for key in ("MLFLOW_TRACKING_URI", "MLFLOW_TRACKING_USERNAME",
-                "MLFLOW_TRACKING_PASSWORD"):
-        if not os.getenv(key) or "<" in os.getenv(key, ""):
-            raise RuntimeError(f"{key} missing or placeholder in .env")
+    settings.require_all(*settings.MLFLOW_VARS)
 
     report = json.loads(metrics_path.read_text())
     fm = params["fm"]
-    mlflow.set_tracking_uri(os.environ["MLFLOW_TRACKING_URI"])
+    settings.configure_mlflow()
     mlflow.set_experiment(params["mlflow"]["experiment_name"])
 
     children = {}

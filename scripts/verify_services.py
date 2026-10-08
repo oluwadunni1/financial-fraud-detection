@@ -15,12 +15,11 @@ Needs credentials in .env. Supabase checks additionally need psycopg:
 from __future__ import annotations
 
 import argparse
-import os
 import pathlib
 import sys
 import uuid
 
-from dotenv import load_dotenv
+from fraud import settings
 
 REPO = pathlib.Path(__file__).resolve().parent.parent
 SQL_FILES = ["sql/001_init.sql", "sql/002_challenger.sql"]
@@ -47,9 +46,10 @@ def fail(msg: str) -> None:
 
 
 def require_env(*keys: str) -> bool:
-    missing = [k for k in keys if not os.getenv(k) or "<" in os.getenv(k, "")]
-    if missing:
-        fail(f"missing/placeholder in .env: {', '.join(missing)}")
+    try:
+        settings.require_all(*keys)
+    except settings.MissingSetting as exc:
+        fail(f"missing/placeholder in .env: {', '.join(exc.names)}")
         return False
     return True
 
@@ -65,7 +65,7 @@ def check_mlflow() -> None:
     from mlflow.tracking import MlflowClient
     from sklearn.linear_model import LogisticRegression
 
-    mlflow.set_tracking_uri(os.environ["MLFLOW_TRACKING_URI"])
+    settings.configure_mlflow()
     client = MlflowClient()
 
     try:
@@ -121,7 +121,7 @@ def check_supabase(apply_sql: bool) -> None:
         return
 
     try:
-        conn = psycopg.connect(os.environ["DATABASE_URL"], connect_timeout=15)
+        conn = psycopg.connect(settings.database_url(), connect_timeout=15)
     except Exception as e:
         fail(f"cannot connect: {type(e).__name__}: {e}")
         return
@@ -203,7 +203,6 @@ def main() -> int:
     ap.add_argument("--only", choices=["mlflow", "supabase"])
     args = ap.parse_args()
 
-    load_dotenv(REPO / ".env")
     if args.only != "supabase":
         check_mlflow()
     if args.only != "mlflow":

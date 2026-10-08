@@ -31,22 +31,20 @@ from __future__ import annotations
 import argparse
 import datetime as dt
 import json
-import os
 import sys
 
 import numpy as np
 import polars as pl
 
-from fraud.config import REPO_ROOT, load_params, repo_path
+from fraud import settings
+from fraud.config import load_params, repo_path
 from fraud.models.metrics import auc_pr
 
 
 def _client(params: dict):
     import mlflow
-    from dotenv import load_dotenv
 
-    load_dotenv(REPO_ROOT / ".env")
-    mlflow.set_tracking_uri(os.environ["MLFLOW_TRACKING_URI"])
+    settings.configure_mlflow()
     return mlflow.tracking.MlflowClient()
 
 

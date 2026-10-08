@@ -15,16 +15,15 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import pathlib
 import sys
 
 import mlflow
 import torch
-from dotenv import load_dotenv
 from torch_geometric.loader import NeighborLoader
 
-from fraud.config import REPO_ROOT, load_params, repo_path
+from fraud import settings
+from fraud.config import load_params, repo_path
 from fraud.models.gnn import TXN, FraudGNN, load_graph
 
 ALIAS = "challenger"
@@ -47,11 +46,7 @@ def register(
     ablation_metrics: pathlib.Path,
     params: dict,
 ) -> dict:
-    load_dotenv(REPO_ROOT / ".env")
-    for key in ("MLFLOW_TRACKING_URI", "MLFLOW_TRACKING_USERNAME",
-                "MLFLOW_TRACKING_PASSWORD"):
-        if not os.getenv(key) or "<" in os.getenv(key, ""):
-            raise RuntimeError(f"{key} missing or placeholder in .env")
+    settings.require_all(*settings.MLFLOW_VARS)
 
     cfg = params["gnn"]
     info = json.loads((model_dir / "train_info.json").read_text())
@@ -77,7 +72,7 @@ def register(
     model.load_state_dict(torch.load(model_dir / "model.pt", map_location="cpu"))
     model.eval()
 
-    mlflow.set_tracking_uri(os.environ["MLFLOW_TRACKING_URI"])
+    settings.configure_mlflow()
     mlflow.set_experiment(params["mlflow"]["experiment_name"])
     name = params["mlflow"]["registered_model_name"]
 

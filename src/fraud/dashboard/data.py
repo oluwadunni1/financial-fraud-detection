@@ -18,6 +18,7 @@ from typing import Any
 import numpy as np
 import polars as pl
 
+from fraud import settings
 from fraud.config import repo_path
 
 
@@ -26,18 +27,20 @@ def _report(path: str) -> dict:
 
 
 def api_url(params: dict) -> str:
-    return os.getenv("FRAUD_API", params["dashboard"]["api_url"])
+    return settings.override("FRAUD_API", params["dashboard"]["api_url"])
 
 
 def db_url(params: dict) -> str:
-    return os.getenv("FRAUD_DB_URL", params["dashboard"]["db_url"])
+    return settings.override("FRAUD_DB_URL", params["dashboard"]["db_url"])
 
 
 def connect(params: dict):
     """A store connection to the DASHBOARD's database (Compose by default).
 
-    `store.connect` reads DATABASE_URL, which .env points at Supabase; setting it
-    here first wins, because load_dotenv never overrides an existing variable.
+    `store.connect` reads DATABASE_URL through `fraud.settings`, which .env points
+    at Supabase. Setting it here first wins on both counts: settings loads .env
+    without overriding a variable that is already set, and reads DATABASE_URL at
+    call time rather than caching it at import.
     """
     from fraud.api import store
 

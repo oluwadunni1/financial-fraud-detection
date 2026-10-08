@@ -76,15 +76,11 @@ class Predictor:
         Swapping the champion is then an alias move with no redeploy, which is
         the whole reason the registry exists in this project.
         """
-        import os
-
         import mlflow
-        from dotenv import load_dotenv
 
-        from fraud.config import REPO_ROOT
+        from fraud import settings
 
-        load_dotenv(REPO_ROOT / ".env")
-        mlflow.set_tracking_uri(os.environ["MLFLOW_TRACKING_URI"])
+        settings.configure_mlflow()
         alias = alias or params["serving"]["champion_alias"]
         name = params["mlflow"]["registered_model_name"]
 
@@ -301,15 +297,12 @@ def load_scorer(params: dict, alias: str):
     The flavour is read from the logged model itself (xgboost or pytorch), so
     promoting a different kind of model is still just an alias move.
     """
-    import os
-
     import mlflow
-    from dotenv import load_dotenv
 
-    from fraud.config import REPO_ROOT, repo_path
+    from fraud import settings
+    from fraud.config import repo_path
 
-    load_dotenv(REPO_ROOT / ".env")
-    mlflow.set_tracking_uri(os.environ["MLFLOW_TRACKING_URI"])
+    settings.configure_mlflow()
     name = params["mlflow"]["registered_model_name"]
     uri = f"models:/{name}@{alias}"
     flavours = mlflow.models.get_model_info(uri).flavors

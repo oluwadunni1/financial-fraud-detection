@@ -20,6 +20,19 @@ HAS_DATA = (repo_path(PARAMS["paths"]["processed"]).exists()
 streamlit = pytest.importorskip("streamlit")
 
 
+@pytest.fixture(autouse=True)
+def _restore_database_url(monkeypatch):
+    """Pages call `dashboard.data.connect`, which re-points DATABASE_URL at the Compose
+    Postgres on purpose. Inside one pytest process that would leak into every later
+    test that reads DATABASE_URL; monkeypatch restores it after each test."""
+    import os
+
+    if "DATABASE_URL" in os.environ:
+        monkeypatch.setenv("DATABASE_URL", os.environ["DATABASE_URL"])
+    else:
+        monkeypatch.delenv("DATABASE_URL", raising=False)
+
+
 PAGES = {"answer": "page_answer", "replay": "page_replay", "transaction": "page_transaction",
          "operations": "page_ops", "monitoring": "page_monitoring", "serving": "page_serving",
          "retrain": "page_retrain"}

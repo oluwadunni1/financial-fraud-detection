@@ -17,14 +17,17 @@ from __future__ import annotations
 import argparse
 import datetime as dt
 import json
-import os
 import sys
 
 import polars as pl
 
+from fraud import settings
 from fraud.config import load_params, repo_path
 
-API = os.getenv("FRAUD_API", "http://localhost:8000")
+
+def _api(params: dict) -> str:
+    """The live API: FRAUD_API if set, else params.yaml's dashboard.api_url."""
+    return settings.override("FRAUD_API", params["dashboard"]["api_url"])
 
 
 def _rule(title: str) -> None:
@@ -53,11 +56,12 @@ def status(params: dict) -> None:
         print(f"  @{alias:<11} v{v.version:<3} {run.info.run_name:<22} "
               f"evaluated as: {run.data.tags.get('evaluated_model', '-')}")
 
-    _rule(f"API: {API}")
+    api = _api(params)
+    _rule(f"API: {api}")
     try:
         import httpx
 
-        health = httpx.get(f"{API}/health", timeout=5).json()
+        health = httpx.get(f"{api}/health", timeout=5).json()
         for key in ("model_version", "challenger_version", "shadow", "alias_swaps",
                     "aliases_checked_s_ago"):
             print(f"  {key:<22} {health.get(key)}")
@@ -81,7 +85,7 @@ def watch(params: dict, version: str, timeout_s: int = 180) -> None:
     needed = 3 * 4                       # comfortably more checks than workers
     started, streak, last = time.time(), 0, None
     while time.time() - started < timeout_s:
-        health = httpx.get(f"{API}/health", timeout=5).json()
+        health = httpx.get(f"{_api(params)}/health", timeout=5).json()
         live = health["model_version"].rsplit(":", 1)[-1]
         streak = streak + 1 if live == want else 0
         if live != last:

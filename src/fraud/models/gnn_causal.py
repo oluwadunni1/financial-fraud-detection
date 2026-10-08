@@ -31,7 +31,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import shutil
 import sys
 import time
@@ -43,7 +42,7 @@ from torch import nn
 from torch_geometric.data import HeteroData
 
 from fraud.api.subgraph import id_node_features, transaction_feature_names
-from fraud.config import REPO_ROOT, load_params, repo_path
+from fraud.config import load_params, repo_path
 from fraud.features.causal_graph import load
 from fraud.features.encoders import Encoder
 from fraud.features.graph import LABEL
@@ -197,15 +196,14 @@ def train_arm(params: dict, train: CausalBatches, val: CausalBatches, pos_weight
 
 def _log_mlflow(name: str, info: dict) -> None:
     """Every arm is an MLflow run, so losing arms stay on record too."""
-    from dotenv import load_dotenv
+    from fraud import settings
 
-    load_dotenv(REPO_ROOT / ".env")
-    if not os.environ.get("MLFLOW_TRACKING_URI"):
+    if settings.optional("MLFLOW_TRACKING_URI") is None:
         print("    (MLFLOW_TRACKING_URI unset: not logged)")
         return
     import mlflow
 
-    mlflow.set_tracking_uri(os.environ["MLFLOW_TRACKING_URI"])
+    settings.configure_mlflow()
     mlflow.set_experiment("gnn-causal-retrain")
     with mlflow.start_run(run_name=name):
         mlflow.log_params({k: info[k] for k in ("arm", "pos_weight", "cardholder_history",
